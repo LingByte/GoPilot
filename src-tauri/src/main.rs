@@ -7,8 +7,9 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio, Child};
 use std::io::{BufRead, BufReader};
-use std::thread;
 use std::sync::{Arc, Mutex};
+use std::cmp::min;
+use std::thread;
 use std::collections::HashMap;
 use chrono::DateTime;
 use tauri_plugin_single_instance;
@@ -17,6 +18,116 @@ use tauri_plugin_single_instance;
 struct AppState {
     theme: String,
     window_title: String,
+}
+
+#[tauri::command]
+async fn search_workspace(path: String, query: String, max_results: Option<usize>) -> Result<Vec<serde_json::Value>, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let limit = max_results.unwrap_or(500);
+
+    // First try ripgrep (fast). If rg is not installed, fall back to a Rust scan.
+    let rg_output = Command::new("rg")
+        .args(["--vimgrep", "--no-heading", "--color", "never", q, "."])
+        .current_dir(&path)
+        .output();
+
+    if let Ok(output) = rg_output {
+        // rg uses exit code 1 for no matches
+        if !output.status.success() {
+            let code = output.status.code().unwrap_or(-1);
+            if code == 1 {
+                return Ok(vec![]);
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Search failed: {}", stderr.trim()));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut out = Vec::new();
+        for line in stdout.lines().take(min(limit, 10_000)) {
+            // vimgrep format: file:line:col:text
+            let mut parts = line.splitn(4, ':');
+            let file = parts.next().unwrap_or("").to_string();
+            let line_no = parts.next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+            let col_no = parts.next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+            let text = parts.next().unwrap_or("").to_string();
+            if file.is_empty() || line_no <= 0 {
+                continue;
+            }
+            let base = path.trim_end_matches(&['\\', '/'][..]);
+            let rel = file.replace('/', "\\");
+            out.push(serde_json::json!({
+                "path": format!("{}\\{}", base, rel),
+                "line": line_no,
+                "column": col_no,
+                "text": text,
+            }));
+            if out.len() >= limit {
+                break;
+            }
+        }
+        return Ok(out);
+    }
+
+    fn scan_dir(base: &str, dir: &Path, q: &str, limit: usize, out: &mut Vec<serde_json::Value>) {
+        if out.len() >= limit {
+            return;
+        }
+        let rd = match fs::read_dir(dir) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        for ent in rd.flatten() {
+            if out.len() >= limit {
+                return;
+            }
+            let p = ent.path();
+            // Skip common heavy folders
+            if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                if name == "node_modules" || name == ".git" || name == "dist" || name == "target" {
+                    continue;
+                }
+            }
+            if p.is_dir() {
+                scan_dir(base, &p, q, limit, out);
+                continue;
+            }
+            let meta = match ent.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            // Skip large files
+            if meta.len() > 1024 * 1024 {
+                continue;
+            }
+            let content = match fs::read_to_string(&p) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            for (idx, line) in content.lines().enumerate() {
+                if out.len() >= limit {
+                    return;
+                }
+                if let Some(pos) = line.find(q) {
+                    out.push(serde_json::json!({
+                        "path": p.to_string_lossy().to_string(),
+                        "line": (idx + 1) as i64,
+                        "column": (pos + 1) as i64,
+                        "text": line.to_string(),
+                    }));
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    let base_path = Path::new(&path);
+    scan_dir(&path, base_path, q, limit, &mut out);
+    Ok(out)
 }
 
 // 存储正在运行的进程
@@ -1023,6 +1134,7 @@ fn main() {
             git_discard,
             git_diff,
             git_branch_graph,
+            search_workspace,
             open_folder_dialog,
             open_file_dialog,
             git_init,

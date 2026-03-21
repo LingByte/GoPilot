@@ -28,10 +28,15 @@ type TabState = {
   viewerId: 'text' | 'markdown' | 'image' | 'audio' | 'pdf' | 'video' | 'binary';
   assetUrl?: string;
   readOnly: boolean;
+  reveal?: {
+    line: number;
+    column?: number;
+  };
 };
 
 export type EditorWorkspaceHandle = {
   openFile: (path: string) => Promise<void>;
+  openFileAt: (path: string, line: number, column?: number) => Promise<void>;
   saveActive: () => Promise<void>;
 };
 
@@ -244,6 +249,38 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle>(function EditorWorkspa
       setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, value: msg, savedValue: msg, viewerId: 'binary', readOnly: true } : t)));
     }
   }, []);
+
+  const openFileAt = useCallback(
+    async (path: string, line: number, column?: number) => {
+      await openFile(path);
+
+      const wantedLine = Math.max(1, Number(line) || 1);
+      const wantedCol = Math.max(1, Number(column ?? 1) || 1);
+
+      // Wait a tick for tab state to materialize.
+      for (let i = 0; i < 20; i++) {
+        const tab = tabsRef.current.find((t) => t.path === path);
+        if (tab) {
+          setTabs((prev) =>
+            prev.map((t) =>
+              t.id === tab.id
+                ? {
+                    ...t,
+                    reveal: {
+                      line: wantedLine,
+                      column: wantedCol,
+                    },
+                  }
+                : t,
+            ),
+          );
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 30));
+      }
+    },
+    [openFile],
+  );
 
   useEffect(() => {
     const active = tabs.find((t) => t.id === activeId);
@@ -496,7 +533,7 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle>(function EditorWorkspa
     [tabs],
   );
 
-  useImperativeHandle(ref, () => ({ openFile, saveActive }), [openFile, saveActive]);
+  useImperativeHandle(ref, () => ({ openFile, openFileAt, saveActive }), [openFile, openFileAt, saveActive]);
 
   const keyHandlerRef = useRef<(e: KeyboardEvent) => void>();
   useEffect(() => {
@@ -545,6 +582,7 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle>(function EditorWorkspa
               viewerId: activeTab.viewerId,
               readOnly: activeTab.readOnly,
               value: activeTab.value,
+              reveal: activeTab.reveal,
             }}
             assetUrl={activeTab.assetUrl}
             onChange={onChangeValue}

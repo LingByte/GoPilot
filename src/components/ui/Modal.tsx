@@ -52,15 +52,14 @@ export default function Modal({
       <div
         ref={panelRef}
         className={
-          'relative mx-4 max-h-[80vh] overflow-auto rounded-xl border border-gray-200 bg-white shadow-xl ' +
-          widthClassName
+          'relative mx-4 max-w-[90vw] rounded-xl border border-gray-200 bg-white shadow-xl ' + widthClassName
         }
       >
         <div className="px-4 py-3 border-b border-gray-200">
           <div className="text-sm font-medium text-gray-900">{title}</div>
         </div>
 
-        <div className="px-4 py-3">{children}</div>
+        <div className="px-4 py-3 max-h-[60vh] overflow-auto">{children}</div>
 
         {footer ? <div className="px-4 py-3 border-t border-gray-200">{footer}</div> : null}
       </div>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import GitCommitGraph from '@/components/ui/GitCommitGraph';
+import Modal from '@/components/ui/Modal';
 
 type GitBranch = {
   name: string;
@@ -31,11 +32,26 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
   const [statusItems, setStatusItems] = useState<GitStatusItem[]>([]);
   const [graphLines, setGraphLines] = useState<GitGraphLine[]>([]);
   const [selectedPaths, setSelectedPaths] = useState<Record<string, boolean>>({});
+  const [selectedStagedPaths, setSelectedStagedPaths] = useState<Record<string, boolean>>({});
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState('');
   const [localExpanded, setLocalExpanded] = useState(false);
   const [remoteExpanded, setRemoteExpanded] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
+  const [aheadBy, setAheadBy] = useState(0);
+  const [behindBy, setBehindBy] = useState(0);
+
+  const [createLocalOpen, setCreateLocalOpen] = useState(false);
+  const [createLocalName, setCreateLocalName] = useState('');
+  const [createRemoteOpen, setCreateRemoteOpen] = useState(false);
+  const [createRemoteName, setCreateRemoteName] = useState('');
+  const [createRemoteLocalName, setCreateRemoteLocalName] = useState('');
+
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState('');
+  const [diffFile, setDiffFile] = useState('');
+  const [diffData, setDiffData] = useState<any>(null);
 
   const refresh = useCallback(async () => {
     if (!rootPath) {
@@ -45,6 +61,9 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
       setStatusItems([]);
       setGraphLines([]);
       setSelectedPaths({});
+      setSelectedStagedPaths({});
+      setAheadBy(0);
+      setBehindBy(0);
       setError('');
       return;
     }
@@ -63,6 +82,9 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
         setStatusItems([]);
         setGraphLines([]);
         setSelectedPaths({});
+        setSelectedStagedPaths({});
+        setAheadBy(0);
+        setBehindBy(0);
         return;
       }
 
@@ -108,6 +130,21 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
             .filter((x) => x.hash)
         : [];
       setGraphLines(graph);
+
+      try {
+        const sb = await invoke<string>('execute_command', {
+          command: 'git status -sb',
+          working_dir: rootPath,
+        });
+        const firstLine = String(sb || '').split(/\r?\n/)[0] ?? '';
+        const aheadMatch = firstLine.match(/\[.*?ahead\s+(\d+).*?\]/);
+        const behindMatch = firstLine.match(/\[.*?behind\s+(\d+).*?\]/);
+        setAheadBy(aheadMatch ? Number(aheadMatch[1]) || 0 : 0);
+        setBehindBy(behindMatch ? Number(behindMatch[1]) || 0 : 0);
+      } catch {
+        setAheadBy(0);
+        setBehindBy(0);
+      }
     } catch (e: any) {
       const msg = typeof e === 'string' ? e : e?.message ? String(e.message) : 'Failed to load git info.';
       setError(msg);
@@ -117,6 +154,9 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
       setStatusItems([]);
       setGraphLines([]);
       setSelectedPaths({});
+      setSelectedStagedPaths({});
+      setAheadBy(0);
+      setBehindBy(0);
     } finally {
       setLoading(false);
     }
@@ -130,6 +170,8 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
       try {
         const { invoke } = await import('@tauri-apps/api/tauri');
         await fn(invoke);
+        setSelectedPaths({});
+        setSelectedStagedPaths({});
         await refresh();
       } catch (e: any) {
         const msg = typeof e === 'string' ? e : e?.message ? String(e.message) : 'Action failed.';
@@ -150,13 +192,94 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
     [runAction, rootPath],
   );
 
-  const createBranch = useCallback(async () => {
-    const name = window.prompt('New branch name');
+  const openCreateLocal = useCallback(() => {
+    setCreateLocalName('');
+    setCreateLocalOpen(true);
+  }, []);
+
+  const submitCreateLocal = useCallback(async () => {
+    const name = createLocalName.trim();
     if (!name) return;
     await runAction(async (invoke) => {
       await invoke('git_create_branch', { path: rootPath, branch: name });
+      await invoke('git_checkout', { path: rootPath, branch: name });
     });
-  }, [runAction, rootPath]);
+    setCreateLocalOpen(false);
+    setCreateLocalName('');
+  }, [createLocalName, runAction, rootPath]);
+
+  const openCreateFromRemote = useCallback(
+    (remoteName: string) => {
+      const guessed = remoteName.includes('/') ? remoteName.split('/').slice(1).join('/') : remoteName;
+      setCreateRemoteName(remoteName);
+      setCreateRemoteLocalName(guessed);
+      setCreateRemoteOpen(true);
+    },
+    [],
+  );
+
+  const submitCreateFromRemote = useCallback(async () => {
+    const remoteName = createRemoteName.trim();
+    const localName = createRemoteLocalName.trim();
+    if (!remoteName || !localName) return;
+    await runAction(async (invoke) => {
+      await invoke('execute_command', {
+        command: `git checkout -b "${localName.replace(/"/g, "'")}" --track "${remoteName.replace(/"/g, "'")}"`,
+        working_dir: rootPath,
+      });
+    });
+    setCreateRemoteOpen(false);
+    setCreateRemoteName('');
+    setCreateRemoteLocalName('');
+  }, [createRemoteLocalName, createRemoteName, runAction, rootPath]);
+
+  const openDiff = useCallback(
+    async (file: string) => {
+      if (!rootPath) return;
+      setDiffFile(file);
+      setDiffOpen(true);
+      setDiffLoading(true);
+      setDiffError('');
+      setDiffData(null);
+
+      try {
+        const { invoke } = await import('@tauri-apps/api/tauri');
+        const res = await invoke<any>('git_diff', { path: rootPath, file });
+        setDiffData(res);
+      } catch (e: any) {
+        const msg = typeof e === 'string' ? e : e?.message ? String(e.message) : 'Failed to load diff.';
+        setDiffError(msg);
+      } finally {
+        setDiffLoading(false);
+      }
+    },
+    [rootPath],
+  );
+
+
+  const stagePaths = useCallback(
+    async (paths: string[]) => {
+      if (paths.length === 0) return;
+      await runAction(async (invoke) => {
+        await invoke('git_add', { path: rootPath, files: paths });
+      });
+    },
+    [runAction, rootPath],
+  );
+
+  const unstagePaths = useCallback(
+    async (paths: string[]) => {
+      if (paths.length === 0) return;
+      const args = paths.map((p) => `"${String(p).replace(/"/g, "'")}"`).join(' ');
+      await runAction(async (invoke) => {
+        await invoke('execute_command', {
+          command: `git reset HEAD -- ${args}`,
+          working_dir: rootPath,
+        });
+      });
+    },
+    [runAction, rootPath],
+  );
 
   const pull = useCallback(async () => {
     await runAction(async (invoke) => {
@@ -170,45 +293,19 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
     });
   }, [runAction, rootPath]);
 
-  const stagePaths = useCallback(
-    async (paths: string[]) => {
-      if (paths.length === 0) return;
-      await runAction(async (invoke) => {
-        await invoke('git_add', { path: rootPath, files: paths });
-      });
-    },
-    [runAction, rootPath],
-  );
-
-  const commitStaged = useCallback(async () => {
-    const msg = commitMessage.trim();
-    if (!msg) return;
-    await runAction(async (invoke) => {
-      await invoke('git_commit', { path: rootPath, message: msg });
-    });
-    setCommitMessage('');
-  }, [commitMessage, runAction, rootPath]);
-
-  const commitAm = useCallback(async () => {
+  const commitAll = useCallback(async () => {
     const msg = commitMessage.trim();
     if (!msg) return;
     const safeMsg = msg.replace(/\r?\n/g, ' ').replace(/"/g, "'");
     await runAction(async (invoke) => {
       await invoke('execute_command', {
-        command: `git commit -am "${safeMsg}"`,
+        command: 'git add -A',
         working_dir: rootPath,
       });
+      await invoke('git_commit', { path: rootPath, message: safeMsg });
     });
     setCommitMessage('');
   }, [commitMessage, runAction, rootPath]);
-
-  const commit = useCallback(async () => {
-    const message = window.prompt('Commit message');
-    if (!message) return;
-    await runAction(async (invoke) => {
-      await invoke('git_commit', { path: rootPath, message });
-    });
-  }, [runAction, rootPath]);
 
   useEffect(() => {
     void refresh();
@@ -238,57 +335,16 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
     () => Object.keys(selectedPaths).filter((p) => selectedPaths[p]),
     [selectedPaths],
   );
+  const selectedStagedList = useMemo(
+    () => Object.keys(selectedStagedPaths).filter((p) => selectedStagedPaths[p]),
+    [selectedStagedPaths],
+  );
 
   return (
     <div className="h-full flex flex-col bg-white">
       <div className="h-10 px-3 flex items-center justify-between border-b border-gray-200">
         <div className="text-sm font-medium text-gray-800">Git</div>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            className="text-xs px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
-            onClick={() => void pull()}
-            disabled={loading || actionBusy || !isRepo}
-            title="git pull"
-          >
-            Pull
-          </button>
-          <button
-            type="button"
-            className="text-xs px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
-            onClick={() => void push()}
-            disabled={loading || actionBusy || !isRepo}
-            title="git push"
-          >
-            Push
-          </button>
-          <button
-            type="button"
-            className="text-xs px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
-            onClick={() => void createBranch()}
-            disabled={loading || actionBusy || !isRepo}
-            title="git checkout -b"
-          >
-            New
-          </button>
-          <button
-            type="button"
-            className="text-xs px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
-            onClick={() => void commit()}
-            disabled={loading || actionBusy || !isRepo}
-            title="git commit"
-          >
-            Commit
-          </button>
-          <button
-            type="button"
-            className="text-xs px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
-            onClick={() => void refresh()}
-            disabled={loading || actionBusy}
-          >
-            Refresh
-          </button>
-        </div>
+        <div />
       </div>
 
       {error ? <div className="p-3 text-xs text-red-600 whitespace-pre-wrap">{error}</div> : null}
@@ -302,15 +358,176 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
         <div className="p-3 text-xs text-gray-500">No Git repository found in this folder.</div>
       ) : (
         <div className="flex-1 min-h-0 overflow-auto">
+          <Modal
+            open={createLocalOpen}
+            title="Create Branch"
+            onClose={() => setCreateLocalOpen(false)}
+            footer={
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  className="text-xs px-3 py-1.5 rounded border border-gray-200 hover:bg-gray-50"
+                  onClick={() => setCreateLocalOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="text-xs px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+                  onClick={() => void submitCreateLocal()}
+                  disabled={actionBusy || !createLocalName.trim()}
+                >
+                  Create
+                </button>
+              </div>
+            }
+          >
+            <div className="text-[11px] text-gray-500 mb-1">Branch name</div>
+            <input
+              value={createLocalName}
+              onChange={(e) => setCreateLocalName(e.target.value)}
+              placeholder="feature/my-work"
+              className="w-full text-sm px-3 py-2 border border-gray-200 rounded"
+              disabled={actionBusy}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void submitCreateLocal();
+              }}
+            />
+          </Modal>
+
+          <Modal
+            open={diffOpen}
+            title={diffFile ? `Diff: ${diffFile}` : 'Diff'}
+            onClose={() => setDiffOpen(false)}
+            widthClassName="w-[720px]"
+            footer={
+              <div className="flex items-center justify-between">
+                <div className="text-[11px] text-gray-500">
+                  {diffData?.additions != null || diffData?.deletions != null
+                    ? `+${diffData?.additions ?? 0}  -${diffData?.deletions ?? 0}`
+                    : ''}
+                </div>
+                <button
+                  type="button"
+                  className="text-xs px-3 py-1.5 rounded border border-gray-200 hover:bg-gray-50"
+                  onClick={() => setDiffOpen(false)}
+                >
+                  Close
+                </button>
+              </div>
+            }
+          >
+            {diffLoading ? (
+              <div className="text-xs text-gray-500">Loading...</div>
+            ) : diffError ? (
+              <div className="text-xs text-red-600 whitespace-pre-wrap">{diffError}</div>
+            ) : !diffData ? (
+              <div className="text-xs text-gray-500">—</div>
+            ) : (
+              <div className="text-xs font-mono overflow-auto">
+                {Array.isArray(diffData?.hunks) && diffData.hunks.length > 0 ? (
+                  <div className="space-y-3">
+                    {diffData.hunks.map((h: any, idx: number) => (
+                      <div key={idx} className="border border-gray-200 rounded">
+                        <div className="px-2 py-1 text-[11px] text-gray-600 bg-gray-50 border-b border-gray-200">
+                          @@ -{h?.oldStart ?? 0},{h?.oldLines ?? 0} +{h?.newStart ?? 0},{h?.newLines ?? 0} @@
+                        </div>
+                        <div className="px-2 py-1 overflow-auto">
+                          {(h?.lines ?? []).map((ln: any, i: number) => {
+                            const t = String(ln?.type || 'context');
+                            const content = String(ln?.content ?? '');
+                            const prefix = t === 'added' ? '+' : t === 'deleted' ? '-' : ' ';
+                            const cls =
+                              t === 'added'
+                                ? 'text-green-700'
+                                : t === 'deleted'
+                                  ? 'text-red-700'
+                                  : 'text-gray-700';
+                            return (
+                              <div key={i} className={cls + ' whitespace-pre'}>
+                                {prefix}
+                                {content}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-500">No diff.</div>
+                )}
+              </div>
+            )}
+          </Modal>
+
+          <Modal
+            open={createRemoteOpen}
+            title="Create Tracking Branch"
+            onClose={() => setCreateRemoteOpen(false)}
+            footer={
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  className="text-xs px-3 py-1.5 rounded border border-gray-200 hover:bg-gray-50"
+                  onClick={() => setCreateRemoteOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="text-xs px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+                  onClick={() => void submitCreateFromRemote()}
+                  disabled={actionBusy || !createRemoteLocalName.trim()}
+                >
+                  Create
+                </button>
+              </div>
+            }
+          >
+            <div className="text-[11px] text-gray-500 mb-1">Remote</div>
+            <div className="text-sm text-gray-800 mb-3 font-mono">{createRemoteName || '—'}</div>
+            <div className="text-[11px] text-gray-500 mb-1">Local branch name</div>
+            <input
+              value={createRemoteLocalName}
+              onChange={(e) => setCreateRemoteLocalName(e.target.value)}
+              placeholder="feature/my-work"
+              className="w-full text-sm px-3 py-2 border border-gray-200 rounded"
+              disabled={actionBusy}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void submitCreateFromRemote();
+              }}
+            />
+          </Modal>
+
           <div className="p-3">
-            <button
-              type="button"
-              className="w-full flex items-center justify-between text-xs font-medium text-gray-700 mb-2"
-              onClick={() => setLocalExpanded((v) => !v)}
-            >
-              <div>Local</div>
-              <div className="text-[11px] text-gray-500">{localExpanded ? 'Collapse' : 'Expand'}</div>
-            </button>
+            <div className="w-full flex items-center justify-between mb-2">
+              <button
+                type="button"
+                className="text-xs font-medium text-gray-700"
+                onClick={() => setLocalExpanded((v) => !v)}
+              >
+                Local
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="text-[11px] text-gray-500 hover:text-gray-700"
+                  onClick={() => openCreateLocal()}
+                  disabled={actionBusy}
+                  title="Create new local branch"
+                >
+                  Add
+                </button>
+                <button
+                  type="button"
+                  className="text-[11px] text-gray-500 hover:text-gray-700"
+                  onClick={() => setLocalExpanded((v) => !v)}
+                >
+                  {localExpanded ? 'Collapse' : 'Expand'}
+                </button>
+              </div>
+            </div>
             {localBranches.length === 0 ? (
               <div className="text-xs text-gray-500">—</div>
             ) : (
@@ -338,14 +555,35 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
           </div>
 
           <div className="p-3 border-t border-gray-200">
-            <button
-              type="button"
-              className="w-full flex items-center justify-between text-xs font-medium text-gray-700 mb-2"
-              onClick={() => setRemoteExpanded((v) => !v)}
-            >
-              <div>Remote</div>
-              <div className="text-[11px] text-gray-500">{remoteExpanded ? 'Collapse' : 'Expand'}</div>
-            </button>
+            <div className="w-full flex items-center justify-between mb-2">
+              <button
+                type="button"
+                className="text-xs font-medium text-gray-700"
+                onClick={() => setRemoteExpanded((v) => !v)}
+              >
+                Remote
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="text-[11px] text-gray-500 hover:text-gray-700"
+                  onClick={() => {
+                    if (matchedRemote) openCreateFromRemote(matchedRemote.name);
+                  }}
+                  disabled={actionBusy || !matchedRemote}
+                  title={matchedRemote ? 'Create local branch tracking this remote' : 'No matching remote'}
+                >
+                  Add
+                </button>
+                <button
+                  type="button"
+                  className="text-[11px] text-gray-500 hover:text-gray-700"
+                  onClick={() => setRemoteExpanded((v) => !v)}
+                >
+                  {remoteExpanded ? 'Collapse' : 'Expand'}
+                </button>
+              </div>
+            </div>
             {remoteBranches.length === 0 ? (
               <div className="text-xs text-gray-500">—</div>
             ) : (
@@ -373,8 +611,55 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
           </div>
 
           <div className="p-3 border-t border-gray-200">
+            <div className="text-xs font-medium text-gray-700 mb-2">Commit</div>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <input
+                  value={commitMessage}
+                  onChange={(e) => setCommitMessage(e.target.value)}
+                  placeholder="message..."
+                  className="flex-1 text-xs px-2 py-1 border border-gray-200 rounded"
+                  disabled={actionBusy}
+                />
+                <button
+                  type="button"
+                  className="text-xs px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
+                  onClick={() => void commitAll()}
+                  disabled={actionBusy || !commitMessage.trim()}
+                  title="git add -A && git commit"
+                >
+                  Commit
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="text-xs px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
+                  onClick={() => void pull()}
+                  disabled={actionBusy}
+                  title="git pull"
+                >
+                  Pull{behindBy > 0 ? ` ↓${behindBy}` : ''}
+                </button>
+                {aheadBy > 0 ? (
+                  <button
+                    type="button"
+                    className="text-xs px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
+                    onClick={() => void push()}
+                    disabled={actionBusy}
+                    title="git push"
+                  >
+                    Push{` ↑${aheadBy}`}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            <div className="text-[11px] text-gray-500 mt-1">Commit will stage all changes (git add -A).</div>
+          </div>
+
+          <div className="p-3 border-t border-gray-200">
             <div className="flex items-center justify-between mb-2">
-              <div className="text-xs font-medium text-gray-700">Status</div>
               <div className="flex items-center gap-1">
                 <button
                   type="button"
@@ -394,6 +679,24 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
                 >
                   Stage Selected
                 </button>
+                <button
+                  type="button"
+                  className="text-[11px] px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
+                  onClick={() => void unstagePaths(selectedStagedList)}
+                  disabled={actionBusy || selectedStagedList.length === 0}
+                  title="git reset HEAD -- <selected>"
+                >
+                  Unstage Selected
+                </button>
+                <button
+                  type="button"
+                  className="text-[11px] px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
+                  onClick={() => void unstagePaths(staged.map((s) => s.path))}
+                  disabled={actionBusy || staged.length === 0}
+                  title="git reset HEAD -- <all staged>"
+                >
+                  Unstage All
+                </button>
               </div>
             </div>
 
@@ -402,25 +705,7 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
             ) : (
               <div className="space-y-3">
                 <div>
-                  <div className="text-[11px] text-gray-500 mb-1">Staged</div>
-                  {staged.length === 0 ? (
-                    <div className="text-xs text-gray-400">—</div>
-                  ) : (
-                    <div className="space-y-1">
-                      {staged.map((s) => (
-                        <div key={`staged:${s.path}`} className="flex items-center justify-between">
-                          <div className="text-xs text-green-700">{s.status}</div>
-                          <div className="text-xs text-gray-800 truncate ml-2 flex-1" title={s.path}>
-                            {s.path}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <div className="text-[11px] text-gray-500 mb-1">Unstaged</div>
+                  <div className="text-[11px] text-gray-500 mb-1">Changes</div>
                   {unstaged.length === 0 ? (
                     <div className="text-xs text-gray-400">—</div>
                   ) : (
@@ -444,9 +729,68 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
                           >
                             <input type="checkbox" checked={checked} readOnly />
                             <div className="text-xs text-yellow-700 w-20 shrink-0">{s.status}</div>
-                            <div className="text-xs text-gray-800 truncate" title={s.path}>
+                            <div className="text-xs text-gray-800 truncate flex-1" title={s.path}>
                               {s.path}
                             </div>
+                            <button
+                              type="button"
+                              className="text-[11px] px-2 py-0.5 rounded border border-gray-200 hover:bg-white"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void openDiff(s.path);
+                              }}
+                              disabled={actionBusy}
+                              title="View diff"
+                            >
+                              Diff
+                            </button>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <div className="text-[11px] text-gray-500 mb-1">Staged</div>
+                  {staged.length === 0 ? (
+                    <div className="text-xs text-gray-400">—</div>
+                  ) : (
+                    <div className="space-y-1">
+                      {staged.map((s) => {
+                        const checked = !!selectedStagedPaths[s.path];
+                        return (
+                          <button
+                            key={`staged:${s.path}`}
+                            type="button"
+                            className={
+                              'w-full flex items-center gap-2 px-2 py-1 rounded text-left ' +
+                              (checked ? 'bg-gray-100' : 'hover:bg-gray-50 active:bg-gray-100')
+                            }
+                            onClick={() =>
+                              setSelectedStagedPaths((p) => ({
+                                ...p,
+                                [s.path]: !p[s.path],
+                              }))
+                            }
+                          >
+                            <input type="checkbox" checked={checked} readOnly />
+                            <div className="text-xs text-green-700 w-20 shrink-0">{s.status}</div>
+                            <div className="text-xs text-gray-800 truncate flex-1" title={s.path}>
+                              {s.path}
+                            </div>
+                            <button
+                              type="button"
+                              className="text-[11px] px-2 py-0.5 rounded border border-gray-200 hover:bg-white"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void openDiff(s.path);
+                              }}
+                              disabled={actionBusy}
+                              title="View diff"
+                            >
+                              Diff
+                            </button>
                           </button>
                         );
                       })}
@@ -472,40 +816,6 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
                 }))}
               />
             )}
-          </div>
-
-          <div className="p-3 border-t border-gray-200">
-            <div className="text-xs font-medium text-gray-700 mb-2">Commit</div>
-            <div className="flex items-center gap-2">
-              <input
-                value={commitMessage}
-                onChange={(e) => setCommitMessage(e.target.value)}
-                placeholder="message..."
-                className="flex-1 text-xs px-2 py-1 border border-gray-200 rounded"
-                disabled={actionBusy}
-              />
-              <button
-                type="button"
-                className="text-xs px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
-                onClick={() => void commitStaged()}
-                disabled={actionBusy || !commitMessage.trim()}
-                title="git commit (staged)"
-              >
-                Commit
-              </button>
-              <button
-                type="button"
-                className="text-xs px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
-                onClick={() => void commitAm()}
-                disabled={actionBusy || !commitMessage.trim()}
-                title="git commit -am"
-              >
-                -am
-              </button>
-            </div>
-            <div className="text-[11px] text-gray-500 mt-1">
-              Stage files using the checkboxes above.
-            </div>
           </div>
         </div>
       )}

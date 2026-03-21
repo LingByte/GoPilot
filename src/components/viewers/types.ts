@@ -8,6 +8,10 @@ export type FileViewerTabModel = {
   viewerId: 'text' | 'markdown' | 'image' | 'audio' | 'pdf' | 'video' | 'binary';
   readOnly: boolean;
   value: string;
+  reveal?: {
+    line: number;
+    column?: number;
+  };
 };
 
 export type FileViewerRenderParams = {

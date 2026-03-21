@@ -45,6 +45,10 @@ export type MonacoEditorProps = {
   language?: string;
   height?: string | number;
   readOnly?: boolean;
+  reveal?: {
+    line: number;
+    column?: number;
+  };
 };
 
 export type MonacoAnchor = {
@@ -78,6 +82,7 @@ const MonacoEditor = forwardRef<MonacoEditorHandle, MonacoEditorProps>(function 
     language = 'typescript',
     height = '60vh',
     readOnly = false,
+    reveal,
   }: MonacoEditorProps,
   ref,
 ) {
@@ -118,6 +123,21 @@ const MonacoEditor = forwardRef<MonacoEditorHandle, MonacoEditorProps>(function 
     if (!model) return;
     monaco.editor.setModelLanguage(model, normalizedLanguage);
   }, [normalizedLanguage]);
+
+  useEffect(() => {
+    if (!reveal) return;
+    const editor = editorRef.current;
+    if (!editor) return;
+    const lineNumber = Math.max(1, Number(reveal.line) || 1);
+    const column = Math.max(1, Number(reveal.column ?? 1) || 1);
+    try {
+      editor.revealLineInCenter(lineNumber);
+      editor.setPosition({ lineNumber, column });
+      editor.focus();
+    } catch {
+      // ignore
+    }
+  }, [reveal?.line, reveal?.column]);
 
   useImperativeHandle(
     ref,

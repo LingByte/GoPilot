@@ -103,6 +103,7 @@ export const textRenderer: FileViewerRenderer = {
       language={tab.language}
       height="100%"
       readOnly={tab.readOnly}
+      reveal={tab.reveal}
     />
   ),
 };

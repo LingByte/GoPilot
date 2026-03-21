@@ -6,6 +6,8 @@ import ExplorerTree from '@/components/explorer/ExplorerTree';
 import EditorWorkspace, { type EditorWorkspaceHandle } from '@/components/editor/EditorWorkspace';
 import { ViewerRegistryProvider } from '@/components/viewers/ViewerRegistry';
 import { defaultRenderers } from '@/components/viewers/defaultRenderers';
+import GitPanel from '@/components/git/GitPanel';
+import SearchPanel from '@/components/search/SearchPanel';
 
 const EXPLORER_ROOT_KEY = 'gopilot.explorer.rootPath';
 
@@ -121,17 +123,18 @@ function App() {
                     </div>
 
                     <div className={"w-64 min-w-64 border-r border-gray-200 bg-white " + (activeId === 'search' ? '' : 'hidden')}>
-                        <div className="h-10 px-3 flex items-center border-b border-gray-200 text-sm font-medium text-gray-800">
-                            Search
-                        </div>
-                        <div className="p-3 text-xs text-gray-500">Coming soon.</div>
+                        <SearchPanel
+                            rootPath={rootPath}
+                            onOpenMatch={(path, line, column) => {
+                                const ws = workspaceRef.current;
+                                if (!ws) return;
+                                void ws.openFileAt(path, line, column);
+                            }}
+                        />
                     </div>
 
                     <div className={"w-64 min-w-64 border-r border-gray-200 bg-white " + (activeId === 'git' ? '' : 'hidden')}>
-                        <div className="h-10 px-3 flex items-center border-b border-gray-200 text-sm font-medium text-gray-800">
-                            Git
-                        </div>
-                        <div className="p-3 text-xs text-gray-500">Coming soon.</div>
+                        <GitPanel rootPath={rootPath} />
                     </div>
 
                     <div className="flex-1 min-h-0">
