@@ -54,6 +54,8 @@
     "lottie-web": "^5.12.2",
     "lucide-react": "^0.294.0",
     "marked": "^15.0.12",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38",
     "monaco-editor": "^0.54.0",
     "phaser": "^3.90.0",
     "react": "^18.2.0",

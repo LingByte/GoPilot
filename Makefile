@@ -21,7 +21,7 @@ help:
 
 # 安装依赖
 deps:
-	@echo "📦 安装依赖..."
+	@echo "安装依赖..."
 	go mod tidy
 	go mod download
 
@@ -33,7 +33,7 @@ build: deps
 # 运行程序
 run: deps
 	@if [ -z "$(INTERFACE)" ]; then \
-		echo "❌ 错误: 请指定网络接口名称"; \
+		echo "错误: 请指定网络接口名称"; \
 		echo "使用方法: make run INTERFACE=<接口名称>"; \
 		echo "示例: make run INTERFACE=en0"; \
 		exit 1; \

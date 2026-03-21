@@ -11,6 +11,7 @@ use std::thread;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use chrono::DateTime;
+use tauri_plugin_single_instance;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AppState {
@@ -964,6 +965,25 @@ fn main() {
     println!("检测到的文件路径数量: {}", file_paths.len());
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            let paths: Vec<String> = argv
+                .iter()
+                .filter(|arg| {
+                    let s = arg.to_string();
+                    !s.starts_with("--") && Path::new(&s).exists()
+                })
+                .map(|arg| arg.to_string())
+                .collect();
+
+            if paths.is_empty() {
+                return;
+            }
+
+            if let Some(window) = app.get_window("main") {
+                let _ = window.emit("open-files", paths);
+                let _ = window.set_focus();
+            }
+        }))
         .manage(AppState {
             theme: "dark".to_string(),
             window_title: "GoPilot".to_string(),

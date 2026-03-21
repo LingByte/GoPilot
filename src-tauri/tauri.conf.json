@@ -16,7 +16,9 @@
       "fs": {
         "all": true,
         "scope": [
-          "$APPDATA/**"
+          "$APPDATA/**",
+          "$DESKTOP/**",
+          "$HOME/**"
         ]
       },
       "path": {
