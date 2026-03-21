@@ -1,0 +1,198 @@
+﻿{
+  "App.tsx": [
+    "components/Dev/DevErrorHandler.tsx",
+    "components/ErrorBoundary/ErrorBoundary.tsx",
+    "pages/Editor.tsx",
+    "pages/NotFound.tsx"
+  ],
+  "components/Animations/FadeIn.tsx": [],
+  "components/Dev/DevErrorHandler.tsx": [],
+  "components/Editor/AudioPlayer.tsx": [
+    "services/fileSystem.ts",
+    "utils/cn.ts"
+  ],
+  "components/Editor/CodeEditor.tsx": [
+    "components/Editor/InlineCompletionProvider.tsx",
+    "components/Editor/LLMCompletionProvider.tsx",
+    "hooks/useLocalStorage.ts",
+    "services/fileSystem.ts",
+    "services/vscodeExtensionAPI.ts",
+    "utils/goNavigation.ts"
+  ],
+  "components/Editor/ExtensionViewPanel.tsx": [
+    "services/extensionViews.ts"
+  ],
+  "components/Editor/ExtensionsPanel.tsx": [
+    "services/extensionService.ts",
+    "utils/cn.ts",
+    "utils/notification.ts"
+  ],
+  "components/Editor/FileContextMenu.tsx": [
+    "utils/cn.ts"
+  ],
+  "components/Editor/FileSearch.tsx": [
+    "components/Editor/FileTree.tsx",
+    "utils/cn.ts"
+  ],
+  "components/Editor/FileTree.tsx": [
+    "hooks/useLocalStorage.ts",
+    "utils/cn.ts"
+  ],
+  "components/Editor/GitPanel.tsx": [
+    "services/fileSystem.ts",
+    "services/gitService.ts",
+    "utils/cn.ts",
+    "utils/notification.ts"
+  ],
+  "components/Editor/ImagePreview.tsx": [
+    "services/fileSystem.ts",
+    "utils/cn.ts"
+  ],
+  "components/Editor/InlineCompletionProvider.tsx": [
+    "services/llmCompletionService.ts"
+  ],
+  "components/Editor/LLMCompletionProvider.tsx": [
+    "services/llmCompletionService.ts"
+  ],
+  "components/Editor/MarkdownPreview.tsx": [
+    "utils/cn.ts"
+  ],
+  "components/Editor/ReferencesPanel.tsx": [
+    "utils/cn.ts"
+  ],
+  "components/Editor/RunConfigurations.tsx": [
+    "hooks/useLocalStorage.ts",
+    "utils/cn.ts"
+  ],
+  "components/Editor/TabBar.tsx": [
+    "utils/cn.ts"
+  ],
+  "components/Editor/Terminal.tsx": [
+    "hooks/useTerminalHistory.ts",
+    "services/terminal.ts",
+    "services/terminalCompletion.ts",
+    "utils/ansiParser.ts",
+    "utils/cn.ts"
+  ],
+  "components/Editor/TerminalPanel.tsx": [
+    "components/Editor/Terminal.tsx",
+    "services/terminal.ts",
+    "utils/cn.ts"
+  ],
+  "components/ErrorBoundary/ErrorBoundary.tsx": [
+    "utils/cn.ts"
+  ],
+  "components/TitleBar/TitleBar.tsx": [
+    "utils/cn.ts"
+  ],
+  "components/UI/Button.tsx": [
+    "utils/audioEffects.ts",
+    "utils/cn.ts",
+    "utils/themeAdapter.ts"
+  ],
+  "components/UI/Input.tsx": [],
+  "components/UI/Select.tsx": [
+    "utils/cn.ts"
+  ],
+  "components/UI/Slider.tsx": [
+    "utils/cn.ts"
+  ],
+  "components/UI/Switch.tsx": [
+    "utils/cn.ts"
+  ],
+  "hooks/useLocalStorage.ts": [],
+  "hooks/useRecentFiles.ts": [
+    "hooks/useLocalStorage.ts"
+  ],
+  "hooks/useTerminalHistory.ts": [],
+  "index.css": [
+    "styles/theme.css"
+  ],
+  "main.tsx": [
+    "App.tsx",
+    "index.css",
+    "services/extensionLoader.ts",
+    "utils/theme.ts"
+  ],
+  "pages/Editor.tsx": [
+    "components/Editor/AudioPlayer.tsx",
+    "components/Editor/CodeEditor.tsx",
+    "components/Editor/ExtensionViewPanel.tsx",
+    "components/Editor/ExtensionsPanel.tsx",
+    "components/Editor/FileContextMenu.tsx",
+    "components/Editor/FileSearch.tsx",
+    "components/Editor/FileTree.tsx",
+    "components/Editor/GitPanel.tsx",
+    "components/Editor/ImagePreview.tsx",
+    "components/Editor/MarkdownPreview.tsx",
+    "components/Editor/ReferencesPanel.tsx",
+    "components/Editor/RunConfigurations.tsx",
+    "components/Editor/TabBar.tsx",
+    "components/Editor/TerminalPanel.tsx",
+    "components/TitleBar/TitleBar.tsx",
+    "hooks/useLocalStorage.ts",
+    "hooks/useRecentFiles.ts",
+    "pages/Settings.tsx",
+    "services/dialog.ts",
+    "services/extensionViews.ts",
+    "services/fileSystem.ts",
+    "services/goMainDetector.ts",
+    "services/projectState.ts",
+    "utils/cn.ts",
+    "utils/goNavigation.ts",
+    "utils/notification.ts"
+  ],
+  "pages/NotFound.tsx": [
+    "components/Animations/FadeIn.tsx",
+    "components/UI/Button.tsx"
+  ],
+  "pages/Settings.tsx": [
+    "components/UI/Button.tsx",
+    "components/UI/Input.tsx",
+    "components/UI/Select.tsx",
+    "components/UI/Slider.tsx",
+    "components/UI/Switch.tsx",
+    "hooks/useLocalStorage.ts",
+    "services/llmCompletionService.ts",
+    "utils/cn.ts",
+    "utils/notification.ts"
+  ],
+  "services/dialog.ts": [],
+  "services/extensionLoader.ts": [
+    "services/extensionService.ts",
+    "services/vscodeExtensionAPI.ts"
+  ],
+  "services/extensionService.ts": [
+    "services/extensionLoader.ts"
+  ],
+  "services/extensionViews.ts": [],
+  "services/fileSystem.ts": [],
+  "services/gitService.ts": [],
+  "services/goMainDetector.ts": [
+    "services/fileSystem.ts"
+  ],
+  "services/llmCompletionService.ts": [],
+  "services/projectState.ts": [
+    "services/fileSystem.ts"
+  ],
+  "services/terminal.ts": [],
+  "services/terminalCompletion.ts": [
+    "services/fileSystem.ts"
+  ],
+  "services/vscodeExtensionAPI.ts": [],
+  "stores/uiStore.ts": [],
+  "styles/theme.css": [],
+  "utils/ansiParser.ts": [],
+  "utils/audioEffects.ts": [],
+  "utils/cn.ts": [],
+  "utils/goNavigation.ts": [
+    "services/fileSystem.ts",
+    "utils/goNavigation.ts"
+  ],
+  "utils/notification.ts": [
+    "stores/uiStore.ts",
+    "utils/audioEffects.ts"
+  ],
+  "utils/theme.ts": [],
+  "utils/themeAdapter.ts": []
+}

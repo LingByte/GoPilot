@@ -1,0 +1,88 @@
+{
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devPath": "http://localhost:3535",
+    "distDir": "../dist",
+    "withGlobalTauri": false
+  },
+  "package": {
+    "productName": "GoPilot",
+    "version": "1.0.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": true,
+      "fs": {
+        "all": true,
+        "scope": [
+          "$APPDATA/**"
+        ]
+      },
+      "path": {
+        "all": true
+      },
+      "http": {
+        "all": true,
+        "request": true
+      }
+    },
+    "cli": {
+      "args": [
+        {
+          "name": "file",
+          "takesValue": true,
+          "multiple": true
+        }
+      ]
+    },
+    "bundle": {
+      "active": true,
+      "targets": "all",
+      "identifier": "com.cetiprobe.desktop",
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ],
+      "resources": [],
+      "externalBin": [],
+      "copyright": "",
+      "category": "DeveloperTool",
+      "shortDescription": "GoPilot - A modern code editor for Go",
+      "longDescription": "GoPilot is a powerful code editor designed for Go development, featuring syntax highlighting, IntelliSense, debugging, and more",
+      "macOS": {
+        "frameworks": [],
+        "minimumSystemVersion": "10.13",
+        "exceptionDomain": "",
+        "signingIdentity": null,
+        "providerShortName": null,
+        "entitlements": null
+      },
+      "windows": {
+        "certificateThumbprint": null,
+        "digestAlgorithm": "sha256",
+        "timestampUrl": ""
+      }
+    },
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "fullscreen": false,
+        "resizable": true,
+        "title": "GoPilot",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "decorations": false,
+        "transparent": false
+      }
+    ]
+  }
+}

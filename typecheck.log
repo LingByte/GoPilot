@@ -1,0 +1,125 @@
+﻿npm : npm warn Unknown user config "disturl". This will stop working in the next major version of npm.
+所在位置 行:1 字符: 1
++ npm run type-check 2>&1 | Out-File -Encoding utf8 typecheck.log; Sele ...
++ ~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn Unknow...version of npm.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+npm warn Unknown user config "electron_mirror". This will stop working in the next major version of npm.
+
+> gopilot@1.0.0 type-check
+> tsc --noEmit
+
+src/components/Editor/AudioPlayer.tsx(482,9): error TS6133: 'handleSeek' is declared but its value is never read.
+src/components/Editor/CodeEditor.tsx(1,36): error TS6133: 'useState' is declared but its value is never read.
+src/components/Editor/CodeEditor.tsx(185,7): error TS2322: Type 'true' is not assignable to type '"off" | "singleFile" | "multiFile" | undefined'.
+src/components/Editor/CodeEditor.tsx(238,86): error TS2345: Argument of type 'LLMCompletionProvider' is not assignable to parameter of type 'CompletionItemProvider'.
+  The types returned by 'provideCompletionItems(...)' are incompatible between these types.
+    Type 'Promise<ProviderResult<CompletionList>>' is not assignable to type 'ProviderResult<CompletionList>'.
+      Type 'Promise<ProviderResult<CompletionList>>' is not assignable to type 'Thenable<CompletionList | null | undefined>'.
+        Types of property 'then' are incompatible.
+          Type '<TResult1 = ProviderResult<CompletionList>, TResult2 = never>(onfulfilled?: ((value: ProviderResult<CompletionList>) => TResult1 | PromiseLike<...>) | null | undefined, onrejected?: ((reason: any) => TResult2 | PromiseLike<...>) | ... 1 more ... | undefined) => Promise<...>' is not assignable to type '<TResult1 = CompletionList | null | undefined, TResult2 = never>(onfulfilled?: ((value: CompletionList | null | undefined) => TResult1 | PromiseLike<TResult1>) | null | undefined, onrejected?: ((reason: any) => TResult2 | PromiseLike<...>) | ... 1 more ... | undefined) => PromiseLike<...>'.
+            Types of parameters 'onfulfilled' and 'onfulfilled' are incompatible.
+              Types of parameters 'value' and 'value' are incompatible.
+                Type 'ProviderResult<CompletionList>' is not assignable to type 'CompletionList | null | undefined'.
+                  Property 'suggestions' is missing in type 'PromiseLike<CompletionList | null | undefined>' but required in type 'CompletionList'.
+src/components/Editor/CodeEditor.tsx(372,17): error TS2739: Type 'Position' is missing the following properties from type '{ filePath: string; line: number; column: number; }': filePath, line
+src/components/Editor/CodeEditor.tsx(378,17): error TS2739: Type 'Position' is missing the following properties from type '{ filePath: string; line: number; column: number; }': filePath, line
+src/components/Editor/CodeEditor.tsx(457,33): error TS2551: Property 'button' does not exist on type 'IMouseEvent'. Did you mean 'buttons'?
+src/components/Editor/CodeEditor.tsx(608,62): error TS2339: Property 'MouseLeft' does not exist on type 'typeof KeyCode'.
+src/components/Editor/ExtensionViewPanel.tsx(8,10): error TS6133: 'extensionViewsService' is declared but its value is never read.
+src/components/Editor/FileContextMenu.tsx(2,53): error TS6133: 'File' is declared but its value is never read.
+src/components/Editor/FileContextMenu.tsx(3,1): error TS6133: 'cn' is declared but its value is never read.
+src/components/Editor/FileSearch.tsx(106,37): error TS6133: 'index' is declared but its value is never read.
+src/components/Editor/FileTree.tsx(68,9): error TS6133: 'prevFilesSignatureRef' is declared but its value is never read.
+src/components/Editor/FileTree.tsx(284,47): error TS6133: 'e' is declared but its value is never read.
+src/components/Editor/InlineCompletionProvider.tsx(9,11): error TS6133: 'editor' is declared but its value is never read.
+src/components/Editor/InlineCompletionProvider.tsx(21,5): error TS6133: 'context' is declared but its value is never read.
+src/components/Editor/InlineCompletionProvider.tsx(33,11): error TS6133: 'textUntilPosition' is declared but its value is never read.
+src/components/Editor/InlineCompletionProvider.tsx(125,25): error TS6133: 'completions' is declared but its value is never read.
+src/components/Editor/InlineCompletionProvider.tsx(132,5): error TS6133: 'reason' is declared but its value is never read.
+src/components/Editor/LLMCompletionProvider.tsx(8,11): error TS6133: 'editor' is declared but its value is never read.
+src/components/Editor/LLMCompletionProvider.tsx(19,9): error TS2416: Property 'provideCompletionItems' in type 'LLMCompletionProvider' is not assignable to the same property in base type 'CompletionItemProvider'.
+  Type '(model: ITextModel, position: Position, completionContext: CompletionContext, token: CancellationToken) => Promise<...>' is not assignable to type '(model: ITextModel, position: Position, context: CompletionContext, token: CancellationToken) => ProviderResult<CompletionList>'.
+    Type 'Promise<ProviderResult<CompletionList>>' is not assignable to type 'ProviderResult<CompletionList>'.
+      Type 'Promise<ProviderResult<CompletionList>>' is not assignable to type 'Thenable<CompletionList | null | undefined>'.
+        Types of property 'then' are incompatible.
+          Type '<TResult1 = ProviderResult<CompletionList>, TResult2 = never>(onfulfilled?: ((value: ProviderResult<CompletionList>) => TResult1 | PromiseLike<...>) | null | undefined, onrejected?: ((reason: any) => TResult2 | PromiseLike<...>) | ... 1 more ... | undefined) => Promise<...>' is not assignable to type '<TResult1 = CompletionList | null | undefined, TResult2 = never>(onfulfilled?: ((value: CompletionList | null | undefined) => TResult1 | PromiseLike<TResult1>) | null | undefined, onrejected?: ((reason: any) => TResult2 | PromiseLike<...>) | ... 1 more ... | undefined) => PromiseLike<...>'.
+            Types of parameters 'onfulfilled' and 'onfulfilled' are incompatible.
+              Types of parameters 'value' and 'value' are incompatible.
+                Type 'ProviderResult<CompletionList>' is not assignable to type 'CompletionList | null | undefined'.
+                  Property 'suggestions' is missing in type 'PromiseLike<CompletionList | null | undefined>' but required in type 'CompletionList'.
+src/components/Editor/LLMCompletionProvider.tsx(22,5): error TS6133: 'completionContext' is declared but its value is never read.
+src/components/Editor/LLMCompletionProvider.tsx(23,5): error TS6133: 'token' is declared but its value is never read.
+src/components/Editor/LLMCompletionProvider.tsx(34,11): error TS6133: 'textUntilPosition' is declared but its value is never read.
+src/components/Editor/MarkdownPreview.tsx(23,7): error TS2353: Object literal may only specify known properties, and 'headerIds' does not exist in type 'MarkedOptions'.
+src/components/Editor/MarkdownPreview.tsx(31,42): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type 'string | Promise<string>' is not assignable to parameter of type 'string | Node'.
+      Type 'Promise<string>' is not assignable to type 'string | Node'.
+src/components/Editor/ReferencesPanel.tsx(3,1): error TS6133: 'cn' is declared but its value is never read.
+src/components/Editor/RunConfigurations.tsx(213,10): error TS6133: 'workspaceRoot' is declared but its value is never read.
+src/components/Editor/Terminal.tsx(24,10): error TS6133: 'isExecuting' is declared but its value is never read.
+src/components/Editor/Terminal.tsx(26,10): error TS6133: 'compositionValue' is declared but its value is never read.
+src/components/Editor/Terminal.tsx(33,57): error TS6133: 'environment' is declared but its value is never read.
+src/components/Editor/Terminal.tsx(97,20): error TS6133: 'isError' is declared but its value is never read.
+src/components/Editor/Terminal.tsx(147,57): error TS2352: Conversion of type '(e: CustomEvent) => Promise<void>' to type 'EventListener' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Types of parameters 'e' and 'evt' are incompatible.
+    Type 'Event' is missing the following properties from type 'CustomEvent<any>': detail, initCustomEvent
+src/components/Editor/Terminal.tsx(149,62): error TS2352: Conversion of type '(e: CustomEvent) => Promise<void>' to type 'EventListener' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Types of parameters 'e' and 'evt' are incompatible.
+    Type 'Event' is missing the following properties from type 'CustomEvent<any>': detail, initCustomEvent
+src/components/Editor/Terminal.tsx(329,18): error TS6133: 'isError' is declared but its value is never read.
+src/components/Editor/TerminalPanel.tsx(1,8): error TS6133: 'React' is declared but its value is never read.
+src/components/Editor/TerminalPanel.tsx(121,9): error TS6133: 'activeTerminal' is declared but its value is never read.
+src/components/UI/Card.tsx(4,10): error TS6133: 'getCurrentTheme' is declared but its value is never read.
+src/hooks/useRecentFiles.ts(1,10): error TS6133: 'useState' is declared but its value is never read.
+src/hooks/useRecentFiles.ts(1,20): error TS6133: 'useEffect' is declared but its value is never read.
+src/pages/Editor.tsx(292,5): error TS6133: 'position' is declared but its value is never read.
+src/pages/Editor.tsx(1552,17): error TS2304: Cannot find name 'setTerminalWorkingDir'.
+src/pages/Settings.tsx(821,27): error TS2322: Type '(value: "lmstudio" | "ollama") => void' is not assignable to type '(value: string) => void'.
+  Types of parameters 'value' and 'value' are incompatible.
+    Type 'string' is not assignable to type '"lmstudio" | "ollama"'.
+src/services/extensionLoader.ts(7,29): error TS6133: 'ExtensionContext' is declared but its value is never read.
+src/services/extensionLoader.ts(73,18): error TS6133: 'extensionContext' is declared but its value is never read.
+src/services/extensionLoader.ts(906,19): error TS6133: 'extensionPath' is declared but its value is never read.
+src/services/extensionService.ts(376,15): error TS6133: 'vsixData' is declared but its value is never read.
+src/services/extensionService.ts(630,9): error TS2322: Type 'string | null' is not assignable to type 'string | undefined'.
+  Type 'null' is not assignable to type 'string | undefined'.
+src/services/extensionService.ts(710,42): error TS2339: Property 'arrayBuffer' does not exist on type 'Blob | { _isFileReference: true; path: string; }'.
+  Property 'arrayBuffer' does not exist on type '{ _isFileReference: true; path: string; }'.
+src/services/extensionService.ts(731,41): error TS2345: Argument of type 'Blob | { _isFileReference: true; path: string; }' is not assignable to parameter of type 'Blob | MediaSource'.
+  Type '{ _isFileReference: true; path: string; }' is not assignable to type 'Blob | MediaSource'.
+src/services/extensionViews.ts(32,12): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(type: keyof WindowEventMap, listener: (this: Window, ev: Event | MouseEvent | UIEvent | ClipboardEvent | CompositionEvent | ... 28 more ... | PromiseRejectionEvent) => any, options?: boolean | ... 1 more ... | undefined): void', gave the following error.
+    Argument of type '"extension-view-containers-registered"' is not assignable to parameter of type 'keyof WindowEventMap'.
+  Overload 2 of 2, '(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions | undefined): void', gave the following error.
+    Argument of type '(event: CustomEvent<any>) => void' is not assignable to parameter of type 'EventListenerOrEventListenerObject'.
+      Type '(event: CustomEvent<any>) => void' is not assignable to type 'EventListener'.
+        Types of parameters 'event' and 'evt' are incompatible.
+          Type 'Event' is missing the following properties from type 'CustomEvent<any>': detail, initCustomEvent
+src/services/extensionViews.ts(33,12): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(type: keyof WindowEventMap, listener: (this: Window, ev: Event | MouseEvent | UIEvent | ClipboardEvent | CompositionEvent | ... 28 more ... | PromiseRejectionEvent) => any, options?: boolean | ... 1 more ... | undefined): void', gave the following error.
+    Argument of type '"extension-views-registered"' is not assignable to parameter of type 'keyof WindowEventMap'.
+  Overload 2 of 2, '(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions | undefined): void', gave the following error.
+    Argument of type '(event: CustomEvent<any>) => void' is not assignable to parameter of type 'EventListenerOrEventListenerObject'.
+      Type '(event: CustomEvent<any>) => void' is not assignable to type 'EventListener'.
+        Types of parameters 'event' and 'evt' are incompatible.
+          Type 'Event' is missing the following properties from type 'CustomEvent<any>': detail, initCustomEvent
+src/services/llmCompletionService.ts(243,51): error TS6133: 'language' is declared but its value is never read.
+src/services/vscodeExtensionAPI.ts(208,21): error TS2339: Property 'activeEditor' does not exist on type 'TextEditor'.
+src/services/vscodeExtensionAPI.ts(223,22): error TS2339: Property 'activeEditor' does not exist on type 'TextEditor'.
+src/services/vscodeExtensionAPI.ts(236,22): error TS2339: Property 'activeEditor' does not exist on type 'TextEditor'.
+src/services/vscodeExtensionAPI.ts(249,20): error TS2339: Property 'activeEditor' does not exist on type 'TextEditor'.
+src/services/vscodeExtensionAPI.ts(261,20): error TS2339: Property 'activeEditor' does not exist on type 'TextEditor'.
+src/services/vscodeExtensionAPI.ts(277,37): error TS6133: 'options' is declared but its value is never read.
+src/services/vscodeExtensionAPI.ts(295,46): error TS6133: 'items' is declared but its value is never read.
+src/services/vscodeExtensionAPI.ts(301,42): error TS6133: 'items' is declared but its value is never read.
+src/services/vscodeExtensionAPI.ts(306,40): error TS6133: 'items' is declared but its value is never read.
+src/stores/themeStore.ts(60,29): error TS6133: 'mode' is declared but its value is never read.
+src/utils/goNavigation.ts(22,49): error TS6133: 'filePath' is declared but its value is never read.
+src/utils/goNavigation.ts(26,7): error TS6133: 'importStartLine' is declared but its value is never read.
+src/utils/goNavigation.ts(259,3): error TS6133: 'currentFilePath' is declared but its value is never read.
+src/utils/goNavigation.ts(260,3): error TS6133: 'workspaceRoot' is declared but its value is never read.
+src/utils/goNavigation.ts(283,9): error TS6133: 'FileSystemService' is declared but its value is never read.
+src/utils/goNavigation.ts(324,9): error TS6133: 'afterCursor' is declared but its value is never read.

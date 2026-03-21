@@ -1,0 +1,30 @@
+[package]
+name = "gopilot"
+version = "1.0.0"
+description = "GoPilot - A modern code editor for Go development"
+authors = ["you"]
+license = ""
+repository = ""
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+plist = "1.0"
+
+[dependencies]
+tauri = { workspace = true, features = ["api-all", "cli", "macos-private-api"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+base64 = "0.21"
+libc = "0.2"
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1.10"
+
+[features]
+# this feature is used for production builds or when `devPath` points to the filesystem
+# DO NOT REMOVE!!
+custom-protocol = ["tauri/custom-protocol"]
