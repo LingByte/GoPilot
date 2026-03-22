@@ -163,25 +163,25 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
   };
 
   return (
-    <div className="h-full flex flex-col bg-gray-900">
+    <div className="h-full flex flex-col bg-primary">
       {/* 工具栏 */}
-      <div className="flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-700">
+      <div className="flex items-center justify-between px-4 py-2 bg-secondary border-b border-border">
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={zoomOut}
-            className="p-2 text-gray-300 hover:text-white hover:bg-gray-700 rounded"
+            className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded"
             title="缩小"
           >
             <ZoomOut className="w-4 h-4" />
           </button>
-          <span className="text-gray-300 text-sm min-w-[60px] text-center">
+          <span className="text-muted-foreground text-sm min-w-[60px] text-center">
             {Math.round(scale * 100)}%
           </span>
           <button
             type="button"
             onClick={zoomIn}
-            className="p-2 text-gray-300 hover:text-white hover:bg-gray-700 rounded"
+            className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded"
             title="放大"
           >
             <ZoomIn className="w-4 h-4" />
@@ -189,18 +189,18 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
           <button
             type="button"
             onClick={resetZoom}
-            className="p-2 text-gray-300 hover:text-white hover:bg-gray-700 rounded"
+            className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded"
             title="重置缩放"
           >
             <X className="w-4 h-4" />
           </button>
           
-          <div className="w-px h-6 bg-gray-600 mx-2" />
+          <div className="w-px h-6 bg-border mx-2" />
           
           <button
             type="button"
             onClick={rotateLeft}
-            className="p-2 text-gray-300 hover:text-white hover:bg-gray-700 rounded"
+            className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded"
             title="左旋转"
           >
             <RotateCcw className="w-4 h-4" />
@@ -208,18 +208,18 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
           <button
             type="button"
             onClick={rotateRight}
-            className="p-2 text-gray-300 hover:text-white hover:bg-gray-700 rounded"
+            className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded"
             title="右旋转"
           >
             <RotateCw className="w-4 h-4" />
           </button>
           
-          <div className="w-px h-6 bg-gray-600 mx-2" />
+          <div className="w-px h-6 bg-border mx-2" />
           
           <button
             type="button"
             onClick={toggleFlipHorizontal}
-            className="p-2 text-gray-300 hover:text-white hover:bg-gray-700 rounded"
+            className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded"
             title="水平翻转"
           >
             <FlipHorizontal className="w-4 h-4" />
@@ -227,7 +227,7 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
           <button
             type="button"
             onClick={toggleFlipVertical}
-            className="p-2 text-gray-300 hover:text-white hover:bg-gray-700 rounded"
+            className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded"
             title="垂直翻转"
           >
             <FlipVertical className="w-4 h-4" />
@@ -238,7 +238,7 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
           <button
             type="button"
             onClick={() => setShowFilters(!showFilters)}
-            className={`p-2 rounded ${showFilters ? 'bg-blue-600 text-white' : 'text-gray-300 hover:text-white hover:bg-gray-700'}`}
+            className={`p-2 rounded ${showFilters ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-accent'}`}
             title="滤镜"
           >
             <Palette className="w-4 h-4" />
@@ -246,7 +246,7 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
           <button
             type="button"
             onClick={() => setShowInfo(!showInfo)}
-            className={`p-2 rounded ${showInfo ? 'bg-blue-600 text-white' : 'text-gray-300 hover:text-white hover:bg-gray-700'}`}
+            className={`p-2 rounded ${showInfo ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-accent'}`}
             title="信息"
           >
             <Info className="w-4 h-4" />
@@ -254,7 +254,7 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
           <button
             type="button"
             onClick={downloadImage}
-            className="p-2 text-gray-300 hover:text-white hover:bg-gray-700 rounded"
+            className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded"
             title="下载"
           >
             <Download className="w-4 h-4" />
@@ -288,10 +288,10 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
 
         {/* 侧边栏 - 相对定位 */}
         {(showInfo || showFilters) && (
-          <div className="absolute right-0 top-0 bottom-0 w-80 bg-gray-800 border-l border-gray-700 overflow-y-auto shadow-2xl z-50">
-            <div className="p-4 border-b border-gray-700">
+          <div className="absolute right-0 top-0 bottom-0 w-80 bg-secondary border-l border-border overflow-y-auto shadow-2xl z-50">
+            <div className="p-4 border-b border-border">
               <div className="flex items-center justify-between">
-                <h3 className="text-white font-medium">
+                <h3 className="text-foreground font-medium">
                   {showInfo ? '图片信息' : '图片滤镜'}
                 </h3>
                 <button
@@ -300,7 +300,7 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
                     setShowInfo(false);
                     setShowFilters(false);
                   }}
-                  className="p-1 text-gray-400 hover:text-white hover:bg-gray-700 rounded"
+                  className="p-1 text-muted-foreground hover:text-foreground hover:bg-accent rounded"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -312,20 +312,20 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
                 {imageInfo && (
                   <div className="space-y-3 text-sm">
                     <div className="flex justify-between">
-                      <span className="text-gray-400">文件名:</span>
-                      <span className="text-gray-200 truncate ml-2">{imageInfo.name}</span>
+                      <span className="text-muted-foreground">文件名:</span>
+                      <span className="text-foreground truncate ml-2">{imageInfo.name}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-gray-400">尺寸:</span>
-                      <span className="text-gray-200">{imageInfo.width} × {imageInfo.height}</span>
+                      <span className="text-muted-foreground">尺寸:</span>
+                      <span className="text-foreground">{imageInfo.width} × {imageInfo.height}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-gray-400">大小:</span>
-                      <span className="text-gray-200">{imageInfo.size}</span>
+                      <span className="text-muted-foreground">大小:</span>
+                      <span className="text-foreground">{imageInfo.size}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-gray-400">类型:</span>
-                      <span className="text-gray-200">{imageInfo.type}</span>
+                      <span className="text-muted-foreground">类型:</span>
+                      <span className="text-foreground">{imageInfo.type}</span>
                     </div>
                   </div>
                 )}
@@ -335,14 +335,14 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
             {showFilters && (
               <div className="p-4">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-white font-medium flex items-center gap-2">
+                  <h3 className="text-foreground font-medium flex items-center gap-2">
                     <Palette className="w-4 h-4" />
                     图片滤镜
                   </h3>
                   <button
                     type="button"
                     onClick={resetFilters}
-                    className="text-xs text-gray-400 hover:text-gray-200"
+                    className="text-xs text-muted-foreground hover:text-foreground"
                   >
                     重置
                   </button>
@@ -350,7 +350,7 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
                 
                 <div className="space-y-4">
                   <div>
-                    <label className="text-gray-300 text-sm flex justify-between mb-1">
+                    <label className="text-muted-foreground text-sm flex justify-between mb-1">
                       <span>亮度</span>
                       <span>{filters.brightness}%</span>
                     </label>
@@ -365,7 +365,7 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
                   </div>
 
                   <div>
-                    <label className="text-gray-300 text-sm flex justify-between mb-1">
+                    <label className="text-muted-foreground text-sm flex justify-between mb-1">
                       <span>对比度</span>
                       <span>{filters.contrast}%</span>
                     </label>
@@ -380,7 +380,7 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
                   </div>
 
                   <div>
-                    <label className="text-gray-300 text-sm flex justify-between mb-1">
+                    <label className="text-muted-foreground text-sm flex justify-between mb-1">
                       <span>饱和度</span>
                       <span>{filters.saturation}%</span>
                     </label>
@@ -395,7 +395,7 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
                   </div>
 
                   <div>
-                    <label className="text-gray-300 text-sm flex justify-between mb-1">
+                    <label className="text-muted-foreground text-sm flex justify-between mb-1">
                       <span>模糊</span>
                       <span>{filters.blur}px</span>
                     </label>
@@ -410,7 +410,7 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
                   </div>
 
                   <div>
-                    <label className="text-gray-300 text-sm flex justify-between mb-1">
+                    <label className="text-muted-foreground text-sm flex justify-between mb-1">
                       <span>灰度</span>
                       <span>{filters.grayscale}%</span>
                     </label>
@@ -425,7 +425,7 @@ export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly 
                   </div>
 
                   <div>
-                    <label className="text-gray-300 text-sm flex justify-between mb-1">
+                    <label className="text-muted-foreground text-sm flex justify-between mb-1">
                       <span>褐色</span>
                       <span>{filters.sepia}%</span>
                     </label>
