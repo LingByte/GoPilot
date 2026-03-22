@@ -140,6 +140,62 @@ function EditorShell() {
     const registryRef = useRef<ExtensionRegistry | null>(null);
     const [ext, setExt] = useState<ExtensionContributions>({ activityBarItems: [], sidebarPanels: [] });
 
+    const LEFT_PANEL_WIDTH_KEY = 'gopilot.leftPanel.width';
+    const [leftPanelWidth, setLeftPanelWidth] = useState(256);
+    const [isLeftDragging, setIsLeftDragging] = useState(false);
+    const leftDragStartX = useRef(0);
+    const leftDragStartWidth = useRef(0);
+
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem(LEFT_PANEL_WIDTH_KEY);
+            const n = raw ? Number(raw) : NaN;
+            if (Number.isFinite(n) && n >= 180) {
+                setLeftPanelWidth(n);
+            }
+        } catch {
+            return;
+        }
+    }, []);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(LEFT_PANEL_WIDTH_KEY, String(leftPanelWidth));
+        } catch {
+            return;
+        }
+    }, [leftPanelWidth]);
+
+    const onLeftResizeMouseDown = useCallback((e: React.MouseEvent) => {
+        setIsLeftDragging(true);
+        leftDragStartX.current = e.clientX;
+        leftDragStartWidth.current = leftPanelWidth;
+        e.preventDefault();
+    }, [leftPanelWidth]);
+
+    useEffect(() => {
+        if (!isLeftDragging) return;
+
+        const onMove = (e: MouseEvent) => {
+            const deltaX = e.clientX - leftDragStartX.current;
+            const minWidth = 180;
+            const maxWidth = window.innerWidth * 0.6;
+            const next = Math.max(minWidth, Math.min(leftDragStartWidth.current + deltaX, maxWidth));
+            setLeftPanelWidth(next);
+        };
+
+        const onUp = () => {
+            setIsLeftDragging(false);
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        return () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+        };
+    }, [isLeftDragging]);
+
     if (!registryRef.current) {
         registryRef.current = new ExtensionRegistry();
         loadBuiltinExtensions(registryRef.current);
@@ -456,40 +512,67 @@ function EditorShell() {
                 <div className="flex-1 min-h-0 flex">
                     <ActivityBar items={items} activeId={activeId} onActiveChange={setActiveId} />
 
-                    <div className={"w-64 min-w-64 border-r border-gray-200 " + (activeId === 'explorer' ? '' : 'hidden')}>
-                        <ExplorerTree
-                            rootPath={rootPath}
-                            onRootPathChange={handleRootPathChange}
-                            onOpenFile={(path) => workspaceRef.current?.openFile(path)}
-                        />
-                    </div>
+                    <aside
+                        className="border-r border-gray-200 bg-white relative"
+                        style={{ width: leftPanelWidth, minWidth: 180 }}
+                    >
+                        {isLeftDragging && (
+                            <div
+                                className="fixed inset-0 z-50 cursor-ew-resizing"
+                                style={{ cursor: 'ew-resizing' }}
+                            />
+                        )}
 
-                    <div className={"w-64 min-w-64 border-r border-gray-200 bg-white " + (activeId === 'search' ? '' : 'hidden')}>
-                        <SearchPanel
-                            rootPath={rootPath}
-                            onOpenMatch={(path, line, column) => {
-                                const ws = workspaceRef.current;
-                                if (!ws) return;
-                                void ws.openFileAt(path, line, column);
-                            }}
-                        />
-                    </div>
-
-                    <div className={"w-64 min-w-64 border-r border-gray-200 bg-white " + (activeId === 'git' ? '' : 'hidden')}>
-                        <GitPanel
-                            rootPath={rootPath}
-                            onOutput={(title: string, text: string) => appendOutput(title, text)}
-                        />
-                    </div>
-
-                    {ext.sidebarPanels.map((p) => (
-                        <div
-                            key={p.id}
-                            className={"w-64 min-w-64 border-r border-gray-200 bg-white " + (activeId === p.id ? '' : 'hidden')}
-                        >
-                            {p.render({ rootPath, onOpenFile: (path) => workspaceRef.current?.openFile(path) })}
+                        <div className={(activeId === 'explorer' ? '' : 'hidden') + ' h-full'}>
+                            <ExplorerTree
+                                rootPath={rootPath}
+                                onRootPathChange={handleRootPathChange}
+                                onOpenFile={(path) => workspaceRef.current?.openFile(path)}
+                            />
                         </div>
-                    ))}
+
+                        <div className={(activeId === 'search' ? '' : 'hidden') + ' h-full'}>
+                            <SearchPanel
+                                rootPath={rootPath}
+                                onOpenMatch={(path, line, column) => {
+                                    const ws = workspaceRef.current;
+                                    if (!ws) return;
+                                    void ws.openFileAt(path, line, column);
+                                }}
+                            />
+                        </div>
+
+                        <div className={(activeId === 'git' ? '' : 'hidden') + ' h-full'}>
+                            <GitPanel
+                                rootPath={rootPath}
+                                onOutput={(title: string, text: string) => appendOutput(title, text)}
+                            />
+                        </div>
+
+                        {ext.sidebarPanels.map((p) => (
+                            <div key={p.id} className={(activeId === p.id ? '' : 'hidden') + ' h-full'}>
+                                {p.render({ rootPath, onOpenFile: (path) => workspaceRef.current?.openFile(path) })}
+                            </div>
+                        ))}
+
+                        <div
+                            className={
+                                'absolute right-0 top-0 bottom-0 w-1 transition-all duration-200 z-10 group ' +
+                                (isLeftDragging
+                                    ? 'bg-blue-500 cursor-ew-resizing'
+                                    : 'bg-gray-300 hover:bg-blue-500 hover:opacity-70 cursor-ew-resize')
+                            }
+                            onMouseDown={onLeftResizeMouseDown}
+                            style={{ right: -2, width: isLeftDragging ? 6 : 4 }}
+                        >
+                            <div
+                                className={
+                                    'absolute right-0 top-1/2 transform -translate-y-1/2 w-0.5 h-6 rounded-full transition-colors duration-200 ' +
+                                    (isLeftDragging ? 'bg-blue-300' : 'bg-gray-400 group-hover:bg-blue-400')
+                                }
+                            />
+                        </div>
+                    </aside>
 
                     <div className="flex-1 min-h-0 flex flex-col w-full overflow-hidden">
                         <div className="flex-1 min-h-0 w-full overflow-hidden">

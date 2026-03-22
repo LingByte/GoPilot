@@ -42,7 +42,8 @@ export default function GitPanel({
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState('');
   const [localExpanded, setLocalExpanded] = useState(false);
-  const [remoteExpanded, setRemoteExpanded] = useState(false);
+  const [remoteMenuOpen, setRemoteMenuOpen] = useState(false);
+  const [graphExpanded, setGraphExpanded] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
   const [aheadBy, setAheadBy] = useState(0);
   const [behindBy, setBehindBy] = useState(0);
@@ -360,11 +361,67 @@ export default function GitPanel({
     [selectedStagedPaths],
   );
 
+  useEffect(() => {
+    if (!remoteMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (!el) return;
+      // close on outside click
+      if (!el.closest('[data-git-remote-menu]')) {
+        setRemoteMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [remoteMenuOpen]);
+
   return (
     <div className="h-full flex flex-col bg-white">
       <div className="h-10 px-3 flex items-center justify-between border-b border-gray-200">
         <div className="text-sm font-medium text-gray-800">Git</div>
-        <div />
+        <div className="relative" data-git-remote-menu>
+          <div className="flex items-center gap-2">
+            <div className="text-[11px] text-gray-500">Remote</div>
+            <div className="text-[11px] text-gray-800 font-mono max-w-[160px] truncate" title={matchedRemote?.name || '—'}>
+              {matchedRemote?.name || '—'}
+            </div>
+            <button
+              type="button"
+              className="text-[11px] text-gray-500 hover:text-gray-800"
+              onClick={() => setRemoteMenuOpen((v) => !v)}
+              disabled={actionBusy || remoteBranches.length === 0}
+              title="Expand remotes"
+            >
+              {remoteMenuOpen ? 'Collapse' : 'Expand'}
+            </button>
+          </div>
+
+          {remoteMenuOpen && (
+            <div className="absolute right-0 top-9 w-[320px] max-h-[50vh] overflow-auto bg-white border border-gray-200 rounded shadow-lg z-50">
+              <div className="px-2 py-2 text-[11px] text-gray-500 border-b border-gray-100">Remote Branches</div>
+              <div className="p-2 space-y-1">
+                {remoteBranches.map((b) => (
+                  <button
+                    key={`remote-menu:${b.name}`}
+                    type="button"
+                    className="w-full flex items-center justify-between px-2 py-1 rounded text-left hover:bg-gray-50 active:bg-gray-100"
+                    onClick={() => {
+                      setRemoteMenuOpen(false);
+                      openCreateFromRemote(b.name);
+                    }}
+                    disabled={actionBusy}
+                    title="Create tracking branch"
+                  >
+                    <div className="text-xs text-gray-800 truncate font-mono" title={b.name}>
+                      {b.name}
+                    </div>
+                    <div className="text-[10px] text-gray-500">REMOTE</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {error ? <div className="p-3 text-xs text-red-600 whitespace-pre-wrap">{error}</div> : null}
@@ -575,62 +632,6 @@ export default function GitPanel({
           </div>
 
           <div className="p-3 border-t border-gray-200">
-            <div className="w-full flex items-center justify-between mb-2">
-              <button
-                type="button"
-                className="text-xs font-medium text-gray-700"
-                onClick={() => setRemoteExpanded((v) => !v)}
-              >
-                Remote
-              </button>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className="text-[11px] text-gray-500 hover:text-gray-700"
-                  onClick={() => {
-                    if (matchedRemote) openCreateFromRemote(matchedRemote.name);
-                  }}
-                  disabled={actionBusy || !matchedRemote}
-                  title={matchedRemote ? 'Create local branch tracking this remote' : 'No matching remote'}
-                >
-                  Add
-                </button>
-                <button
-                  type="button"
-                  className="text-[11px] text-gray-500 hover:text-gray-700"
-                  onClick={() => setRemoteExpanded((v) => !v)}
-                >
-                  {remoteExpanded ? 'Collapse' : 'Expand'}
-                </button>
-              </div>
-            </div>
-            {remoteBranches.length === 0 ? (
-              <div className="text-xs text-gray-500">—</div>
-            ) : (
-              <div className="space-y-1">
-                {(remoteExpanded
-                  ? remoteBranches
-                  : matchedRemote
-                    ? [matchedRemote]
-                    : remoteBranches.slice(0, 1)
-                ).map((b) => (
-                  <button
-                    key={`remote:${b.name}`}
-                    type="button"
-                    className="w-full flex items-center justify-between px-2 py-1 rounded text-left hover:bg-gray-100 active:bg-gray-200"
-                    onClick={() => void checkoutBranch(b.name)}
-                    disabled={actionBusy}
-                    title="git checkout"
-                  >
-                    <div className="text-sm truncate text-gray-800">{b.name}</div>
-                    <div className="text-[10px] text-gray-500">REMOTE</div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="p-3 border-t border-gray-200">
             <div className="text-xs font-medium text-gray-700 mb-2">Commit</div>
             <div className="space-y-2">
               <div className="flex items-center gap-2">
@@ -675,7 +676,6 @@ export default function GitPanel({
                 ) : null}
               </div>
             </div>
-            <div className="text-[11px] text-gray-500 mt-1">Commit will stage all changes (git add -A).</div>
           </div>
 
           <div className="p-3 border-t border-gray-200">
@@ -729,7 +729,7 @@ export default function GitPanel({
                   {unstaged.length === 0 ? (
                     <div className="text-xs text-gray-400">—</div>
                   ) : (
-                    <div className="space-y-1">
+                    <div className="space-y-1 max-h-60 overflow-auto pr-1">
                       {unstaged.map((s) => {
                         const checked = !!selectedPaths[s.path];
                         return (
@@ -775,7 +775,7 @@ export default function GitPanel({
                   {staged.length === 0 ? (
                     <div className="text-xs text-gray-400">—</div>
                   ) : (
-                    <div className="space-y-1">
+                    <div className="space-y-1 max-h-60 overflow-auto pr-1">
                       {staged.map((s) => {
                         const checked = !!selectedStagedPaths[s.path];
                         return (
@@ -820,19 +820,24 @@ export default function GitPanel({
           </div>
 
           <div className="p-3 border-t border-gray-200">
-            <div className="text-xs font-medium text-gray-700 mb-2">Graph</div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-medium text-gray-700">Graph</div>
+              <button
+                type="button"
+                className="text-[11px] text-gray-500 hover:text-gray-800"
+                onClick={() => setGraphExpanded((v) => !v)}
+                disabled={graphLines.length === 0}
+              >
+                {graphExpanded ? 'Collapse' : 'Expand'}
+              </button>
+            </div>
+
             {graphLines.length === 0 ? (
               <div className="text-xs text-gray-500">—</div>
+            ) : graphExpanded ? (
+              <GitCommitGraph lines={graphLines} />
             ) : (
-              <GitCommitGraph
-                lines={graphLines.map((l) => ({
-                  graph: l.graph,
-                  hash: l.hash,
-                  message: l.message,
-                  refs: l.refs,
-                  timestamp: l.timestamp,
-                }))}
-              />
+              <div className="text-xs text-gray-500"></div>
             )}
           </div>
         </div>
@@ -840,3 +845,4 @@ export default function GitPanel({
     </div>
   );
 }
+
