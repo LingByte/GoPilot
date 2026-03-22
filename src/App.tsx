@@ -1,7 +1,7 @@
 import GlobalHeader from '@/components/layouts/GlobalHeader';
 import ActivityBar, { type ActivityBarItem } from '@/components/layouts/ActivityBar';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Files, Search, GitBranch, Terminal, Database } from 'lucide-react';
+import { Files, Search, GitBranch, Terminal, Database, Bot } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ExplorerTree from '@/components/explorer/ExplorerTree';
 import EditorWorkspace, { type EditorWorkspaceHandle } from '@/components/editor/EditorWorkspace';
@@ -13,6 +13,7 @@ import GlobalFooter from '@/components/layouts/GlobalFooter';
 import BottomPanel from '@/components/terminal/BottomPanel';
 import ResizableRightPanel from '@/components/layouts/ResizableRightPanel';
 import DatabasePanel from '@/components/database/DatabasePanel';
+import AIPanel from '@/components/ai/AIPanel';
 import { ExtensionRegistry } from './extensions/registry';
 import { loadBuiltinExtensions } from '@/extensions/builtin';
 import { loadInstalledExtensionContributions } from './extensions/installed';
@@ -180,6 +181,7 @@ function EditorShell() {
         return [
             { id: 'tools', label: 'Tools', icon: <Terminal className="w-5 h-5" /> },
             { id: 'database', label: 'Database', icon: <Database className="w-5 h-5" /> },
+            { id: 'ai', label: 'AI Assistant', icon: <Bot className="w-5 h-5" /> },
         ];
     }, []);
 
@@ -570,6 +572,13 @@ function EditorShell() {
                                 children: <DatabasePanel rootPath={rootPath} />,
                                 minWidth: 300,
                                 defaultWidth: 480,
+                            },
+                            {
+                                id: 'ai',
+                                title: 'AI Assistant',
+                                children: <AIPanel />,
+                                minWidth: 350,
+                                defaultWidth: 420,
                             },
                         ]}
                         activeId={rightActiveId}

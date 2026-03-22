@@ -1,13 +1,25 @@
 [package]
 name = "gopilot"
 version = "1.0.0"
-description = "GoPilot - A modern code editor for Go development"
+description = "A Tauri App"
 authors = ["you"]
 license = ""
 repository = ""
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "gopilot"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gopilot"
+path = "src/main.rs"
+
+[[bin]]
+name = "demo_task_decomposition"
+path = "demo_task_decomposition.rs"
 
 [build-dependencies]
 tauri-build = { version = "1.5", features = [] }
@@ -23,8 +35,11 @@ libc = "0.2"
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.11", features = ["json", "stream"] }
 futures-util = "0.3"
+async-trait = "0.1"
+bytes = "1.0"
 regex = "1.10"
 zip = "0.6"
+uuid = { version = "1.0", features = ["v4", "serde"] }
 tauri-plugin-single-instance = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v1" }
 portable-pty = "0.8"
 
@@ -33,7 +48,13 @@ sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio-r
 mongodb = { version = "2", default-features = false, features = ["tokio-runtime"] }
 redis = { version = "0.25", default-features = false, features = ["tokio-comp"] }
 
+# Environment variables
+dotenvy = "0.15"
+
+# Test dependencies
+[dev-dependencies]
+tokio-test = "0.4"
+
 [features]
-# this feature is used for production builds or when `devPath` points to the filesystem
-# DO NOT REMOVE!!
+# This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]

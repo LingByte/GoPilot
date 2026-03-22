@@ -10,17 +10,30 @@ use std::io::{BufRead, BufReader};
 use std::cmp::min;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use futures_util::StreamExt;
 use tokio::io::AsyncWriteExt;
 use std::thread;
 use std::collections::HashMap;
 use chrono::DateTime;
 use tauri_plugin_single_instance;
+use tokio::sync::Mutex as TokioMutex;
+use std::pin::Pin;
 mod extension_host;
 mod db;
+mod ai;
+mod config;
+mod task_decomposition;
 
 use extension_host::{ExtensionHostState, start_extension_host, stop_extension_host, activate_extension, deactivate_extension, extension_host_execute_command};
+use ai::{
+    AiConfig, ChatRequest, ChatMessage, ChatResponse, ChatStreamChunk,
+    create_ai_client, AiError
+};
+use task_decomposition::{
+    RequirementAnalyzer, TaskDecomposer, IntentClassifier,
+    UserRequirement, RequirementIntent, ComplexityLevel, DomainType, ProjectContext,
+    DevelopmentTask, TaskType, Priority
+};
 use db::{
     DbRegistry,
     db_add_connection,
@@ -1409,6 +1422,194 @@ async fn kill_command(
     Ok(())
 }
 
+// AI 配置状态
+static AI_CONFIG: TokioMutex<Option<AiConfig>> = TokioMutex::const_new(None);
+
+/// 设置 AI 配置
+#[tauri::command]
+async fn ai_set_config(config: AiConfig) -> Result<(), String> {
+    let mut global_config = AI_CONFIG.lock().await;
+    *global_config = Some(config);
+    Ok(())
+}
+
+/// 获取 AI 配置
+#[tauri::command]
+async fn ai_get_config() -> Result<Option<AiConfig>, String> {
+    let config = AI_CONFIG.lock().await;
+    Ok(config.clone())
+}
+
+/// 测试 AI 连接
+#[tauri::command]
+async fn ai_test_connection(config: AiConfig) -> Result<String, String> {
+    let client = create_ai_client(config);
+    
+    let test_request = ChatRequest {
+        model: "gpt-3.5-turbo".to_string(), // 使用默认模型进行测试
+        messages: vec![ChatMessage {
+            role: "user".to_string(),
+            content: "Hello, this is a connection test. Please respond with 'Connection successful'.".to_string(),
+        }],
+        temperature: Some(0.1),
+        max_tokens: Some(50),
+        stream: Some(false),
+    };
+
+    match client.chat(test_request).await {
+        Ok(response) => {
+            if let Some(choice) = response.choices.first() {
+                Ok(format!("连接成功！\n模型: {}\n响应: {}", response.model, choice.message.content))
+            } else {
+                Err("连接成功但无响应内容".to_string())
+            }
+        }
+        Err(e) => Err(format!("连接失败: {}", e)),
+    }
+}
+
+/// AI 聊天（非流式）
+#[tauri::command]
+async fn ai_chat(request: ChatRequest) -> Result<ChatResponse, String> {
+    println!("🔍 AI 聊天请求: {:?}", request);
+    
+    let config = AI_CONFIG.lock().await;
+    println!("🔍 当前 AI 配置: {:?}", config);
+    
+    if let Some(config) = config.as_ref() {
+        println!("✅ 使用配置创建 AI 客户端");
+        let client = create_ai_client(config.clone());
+        println!("✅ AI 客户端创建成功，开始聊天");
+        
+        let result = client.chat(request).await;
+        println!("🔍 聊天结果: {:?}", result);
+        
+        match result {
+            Ok(response) => {
+                println!("✅ 聊天成功");
+                Ok(response)
+            }
+            Err(e) => {
+                println!("❌ 聊天失败: {:?}", e);
+                Err(e.to_string())
+            }
+        }
+    } else {
+        println!("❌ AI 配置未设置");
+        Err("AI 配置未设置".to_string())
+    }
+}
+
+/// AI 聊天（流式）
+#[tauri::command]
+async fn ai_chat_stream(
+    request: ChatRequest,
+    window: tauri::Window,
+) -> Result<(), String> {
+    let config = AI_CONFIG.lock().await;
+    
+    if let Some(config) = config.as_ref() {
+        let client = create_ai_client(config.clone());
+        let stream: Pin<Box<dyn futures_util::Stream<Item = Result<ChatStreamChunk, AiError>> + Send>> = client.chat_stream(request).await.map_err(|e| e.to_string())?;
+        
+        let mut stream = stream;
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    if let Some(choice) = chunk.choices.first() {
+                        if let Some(content) = &choice.delta.content {
+                            if let Err(e) = window.emit("ai-chat-chunk", content) {
+                                eprintln!("发送聊天块失败: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = window.emit("ai-chat-error", e.to_string());
+                    break;
+                }
+            }
+        }
+        
+        // 发送结束信号
+        let _ = window.emit("ai-chat-end", "");
+        Ok(())
+    } else {
+        Err("AI 配置未设置".to_string())
+    }
+}
+
+// 任务拆解相关命令
+#[tauri::command]
+async fn classify_requirement(text: String) -> Result<RequirementIntent, String> {
+    let classifier = IntentClassifier::new();
+    Ok(classifier.classify(&text))
+}
+
+#[tauri::command]
+async fn estimate_complexity(requirement: String, project_context: ProjectContext) -> Result<ComplexityLevel, String> {
+    let estimator = task_decomposition::ComplexityEstimator::new().map_err(|e| e.to_string())?;
+    estimator.estimate(&requirement, &project_context).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn analyze_requirement(requirement_text: String, project_context: ProjectContext) -> Result<UserRequirement, String> {
+    println!("🔍 分析需求: {}", requirement_text);
+    println!("🔍 项目上下文: {:?}", project_context);
+    
+    let analyzer = RequirementAnalyzer::new().map_err(|e| e.to_string())?;
+    let result = analyzer.analyze(requirement_text, project_context).await;
+    
+    match &result {
+        Ok(requirement) => {
+            println!("✅ 需求分析成功: {:?}", requirement);
+        }
+        Err(e) => {
+            println!("❌ 需求分析失败: {}", e);
+        }
+    }
+    
+    result.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn decompose_requirement(requirement: UserRequirement) -> Result<Vec<DevelopmentTask>, String> {
+    println!("🔍 拆解需求: {:?}", requirement);
+    
+    let decomposer = TaskDecomposer::new().map_err(|e| e.to_string())?;
+    let result = decomposer.decompose(&requirement).await;
+    
+    match &result {
+        Ok(tasks) => {
+            println!("✅ 任务拆解成功，生成 {} 个任务", tasks.len());
+            for (i, task) in tasks.iter().enumerate() {
+                println!("  任务 {}: {}", i + 1, task.title);
+            }
+        }
+        Err(e) => {
+            println!("❌ 任务拆解失败: {}", e);
+        }
+    }
+    
+    result.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn simple_decompose_requirement(requirement: UserRequirement) -> Result<Vec<DevelopmentTask>, String> {
+    println!("🔍 简单拆解需求: {:?}", requirement);
+    
+    let decomposer = TaskDecomposer::new().map_err(|e| e.to_string())?;
+    let tasks = decomposer.simple_decompose(&requirement);
+    
+    println!("✅ 简单任务拆解成功，生成 {} 个任务", tasks.len());
+    for (i, task) in tasks.iter().enumerate() {
+        println!("  任务 {}: {}", i + 1, task.title);
+    }
+    
+    Ok(tasks)
+}
+
 fn main() {
     // 获取命令行参数（用于处理拖放的文件）
     // 在 macOS 上，拖放到应用图标上的文件会作为命令行参数传递
@@ -1426,6 +1627,18 @@ fn main() {
         .collect();
     
     println!("检测到的文件路径数量: {}", file_paths.len());
+
+    // 自动加载 AI 配置
+    let ai_config = match config::ConfigLoader::load_from_env() {
+        Ok(app_config) => {
+            println!("✅ 成功加载 AI 配置");
+            Some(app_config.ai)
+        }
+        Err(e) => {
+            println!("⚠️  加载 AI 配置失败: {}", e);
+            None
+        }
+    };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
@@ -1522,8 +1735,30 @@ fn main() {
             db_mongo_run_command,
             db_redis_cmd,
             db_redis_info,
+            ai_chat,
+            ai_chat_stream,
+            ai_set_config,
+            ai_get_config,
+            ai_test_connection,
+            classify_requirement,
+            estimate_complexity,
+            analyze_requirement,
+            decompose_requirement,
+            simple_decompose_requirement,
         ])
         .setup(move |app| {
+            // 自动设置 AI 配置
+            if let Some(ref config) = ai_config {
+                tauri::async_runtime::spawn({
+                    let config = config.clone();
+                    async move {
+                        let mut global_config = AI_CONFIG.lock().await;
+                        *global_config = Some(config);
+                        println!("✅ AI 配置已自动设置到全局变量");
+                    }
+                });
+            }
+
             // 如果有启动参数（拖放的文件），发送事件到前端
             let file_paths_clone = file_paths.clone();
             if !file_paths_clone.is_empty() {
