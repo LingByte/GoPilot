@@ -23,6 +23,7 @@ mod db;
 mod ai;
 mod config;
 mod task_decomposition;
+mod conversation;
 
 use extension_host::{ExtensionHostState, start_extension_host, stop_extension_host, activate_extension, deactivate_extension, extension_host_execute_command};
 use ai::{
@@ -34,6 +35,7 @@ use task_decomposition::{
     UserRequirement, RequirementIntent, ComplexityLevel, DomainType, ProjectContext,
     DevelopmentTask, TaskType, Priority
 };
+use conversation::{get_conversation_manager, Conversation, ConversationConfig};
 use db::{
     DbRegistry,
     db_add_connection,
@@ -1610,6 +1612,87 @@ async fn simple_decompose_requirement(requirement: UserRequirement) -> Result<Ve
     Ok(tasks)
 }
 
+// ==================== 会话管理命令 ====================
+
+/// 创建新会话
+#[tauri::command]
+async fn conversation_create(title: String) -> Result<String, String> {
+    println!("🔍 创建新会话: {}", title);
+    
+    // 获取当前 AI 配置
+    let config = AI_CONFIG.lock().await;
+    let ai_config = config.as_ref()
+        .ok_or("AI 配置未设置")?
+        .clone();
+    
+    let manager = get_conversation_manager();
+    let conversation_id = manager.create_conversation(title, ai_config).await?;
+    
+    println!("✅ 会话创建成功: {}", conversation_id);
+    Ok(conversation_id)
+}
+
+/// 获取会话信息
+#[tauri::command]
+async fn conversation_get(conversation_id: String) -> Result<Conversation, String> {
+    println!("🔍 获取会话: {}", conversation_id);
+    
+    let manager = get_conversation_manager();
+    let conversation = manager.get_conversation(&conversation_id).await
+        .ok_or("会话不存在")?;
+    
+    println!("✅ 会话获取成功");
+    Ok(conversation)
+}
+
+/// 发送消息到会话
+#[tauri::command]
+async fn conversation_send_message(conversation_id: String, content: String) -> Result<ChatResponse, String> {
+    println!("🔍 发送消息到会话 {}: {}", conversation_id, content);
+    
+    let manager = get_conversation_manager();
+    let response = manager.send_message(&conversation_id, content).await?;
+    
+    println!("✅ 消息发送成功");
+    Ok(response)
+}
+
+/// 获取所有会话列表
+#[tauri::command]
+async fn conversation_list() -> Result<Vec<Conversation>, String> {
+    println!("🔍 获取会话列表");
+    
+    let manager = get_conversation_manager();
+    let conversations = manager.list_conversations().await;
+    
+    println!("✅ 获取到 {} 个会话", conversations.len());
+    Ok(conversations)
+}
+
+/// 删除会话
+#[tauri::command]
+async fn conversation_delete(conversation_id: String) -> Result<(), String> {
+    println!("🔍 删除会话: {}", conversation_id);
+    
+    let manager = get_conversation_manager();
+    manager.delete_conversation(&conversation_id).await?;
+    
+    println!("✅ 会话删除成功");
+    Ok(())
+}
+
+/// 清理旧会话
+#[tauri::command]
+async fn conversation_cleanup(days_old: u64) -> Result<usize, String> {
+    println!("🔍 清理 {} 天前的会话", days_old);
+    
+    let manager = get_conversation_manager();
+    let deleted_count = manager.cleanup_old_conversations(days_old).await?;
+    
+    println!("✅ 清理完成，删除了 {} 个会话", deleted_count);
+    Ok(deleted_count)
+}
+
 fn main() {
     // 获取命令行参数（用于处理拖放的文件）
     // 在 macOS 上，拖放到应用图标上的文件会作为命令行参数传递
@@ -1745,6 +1828,12 @@ fn main() {
             analyze_requirement,
             decompose_requirement,
             simple_decompose_requirement,
+            conversation_create,
+            conversation_get,
+            conversation_send_message,
+            conversation_list,
+            conversation_delete,
+            conversation_cleanup,
         ])
         .setup(move |app| {
             // 自动设置 AI 配置
