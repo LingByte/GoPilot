@@ -229,6 +229,13 @@ impl ConversationManager {
             max_tokens: Some(conversation.config.max_tokens),
             stream: Some(false),
         };
+
+        println!(
+            "🔗 AI 请求配置: provider={:?}, base_url={}, model={}",
+            conversation.ai_config.provider,
+            conversation.ai_config.base_url,
+            conversation.ai_config.model
+        );
         
         // 调用 AI
         let start_time = SystemTime::now();

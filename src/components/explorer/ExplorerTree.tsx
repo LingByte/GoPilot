@@ -13,6 +13,7 @@ import {
   BookText,
   FolderOpen,
 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/tauri';
 
 type TreeNode = {
   path: string;
@@ -243,10 +244,29 @@ function normalizeEntryPath(parentPath: string, entryPath: string) {
   return joinPath(parentPath, entryPath);
 }
 
+async function readDirectoryEntries(dirPath: string): Promise<any[]> {
+  // Prefer backend command (no frontend FS scope limitations)
+  try {
+    const entries = await invoke<any[]>('read_directory', { path: dirPath });
+    if (Array.isArray(entries)) return entries;
+    return [];
+  } catch (e) {
+    // Fallback to Tauri FS API (works when command is unavailable)
+    try {
+      const fs = await import('@tauri-apps/api/fs');
+      const entries = await fs.readDir(dirPath, { recursive: false });
+      return Array.isArray(entries) ? entries : [];
+    } catch (fsErr) {
+      throw { invokeError: e, fsError: fsErr };
+    }
+  }
+}
+
 function fromDirEntry(entry: any, parentPath: string): TreeNode {
   const path: string = normalizeEntryPath(parentPath, entry.path ?? '');
   const name: string = entry.name ?? '';
-  const isDir = Array.isArray(entry.children);
+  const entryType: string | undefined = entry.entry_type ?? entry.type ?? entry.entryType;
+  const isDir = entryType === 'directory' || Array.isArray(entry.children);
   return {
     name: name || getNameFromPath(path),
     path,
@@ -337,8 +357,7 @@ export default function ExplorerTree({ onOpenFile, rootPath: controlledRootPath,
       setLoading(true);
       setError('');
       try {
-        const fs = await import('@tauri-apps/api/fs');
-        const entries = await fs.readDir(effectiveRootPath, { recursive: false });
+        const entries = await readDirectoryEntries(effectiveRootPath);
         const built: TreeNode = {
           path: effectiveRootPath,
           name: getNameFromPath(effectiveRootPath),
@@ -348,7 +367,8 @@ export default function ExplorerTree({ onOpenFile, rootPath: controlledRootPath,
         };
         setTree(built);
         setExpanded({ [effectiveRootPath]: true });
-      } catch {
+      } catch (e) {
+        console.error('ExplorerTree: Failed to read directory:', effectiveRootPath, e);
         setError('Failed to read directory.');
         setTree(null);
       } finally {
@@ -379,8 +399,7 @@ export default function ExplorerTree({ onOpenFile, rootPath: controlledRootPath,
 
     setLoadingDirs((prev) => ({ ...prev, [dirPath]: true }));
     try {
-      const fs = await import('@tauri-apps/api/fs');
-      const entries = await fs.readDir(dirPath, { recursive: false });
+      const entries = await readDirectoryEntries(dirPath);
 
       const update = (node: TreeNode): TreeNode => {
         if (node.path === dirPath) {
@@ -395,7 +414,8 @@ export default function ExplorerTree({ onOpenFile, rootPath: controlledRootPath,
       };
 
       setTree((prev) => (prev ? update(prev) : prev));
-    } catch {
+    } catch (e) {
+      console.error('ExplorerTree: Failed to read directory:', dirPath, e);
       setError('Failed to read directory.');
     } finally {
       setLoadingDirs((prev) => {

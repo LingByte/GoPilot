@@ -2,6 +2,22 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import { invoke } from '@tauri-apps/api/tauri';
 import { Conversation, ConversationMessage } from '../types/conversation';
 
+const getTauriErrorMessage = (err: unknown, fallback: string): string => {
+  if (typeof err === 'string') return err;
+  if (err instanceof Error) return err.message || fallback;
+  if (err && typeof err === 'object') {
+    const anyErr = err as any;
+    if (typeof anyErr.message === 'string' && anyErr.message.trim()) return anyErr.message;
+    if (typeof anyErr.error === 'string' && anyErr.error.trim()) return anyErr.error;
+    try {
+      return JSON.stringify(anyErr);
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+};
+
 interface ConversationContextType {
   conversations: Conversation[];
   currentConversation: Conversation | null;
@@ -12,6 +28,7 @@ interface ConversationContextType {
   createConversation: (title: string) => Promise<string>;
   loadConversation: (id: string) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
+  cancelCurrentSend: () => void;
   deleteConversation: (id: string) => Promise<void>;
   refreshConversations: () => Promise<void>;
   setCurrentConversation: (conversation: Conversation | null) => void;
@@ -36,6 +53,13 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
   const [currentConversation, setCurrentConversation] = useState<Conversation | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const activeSendTokenRef = React.useRef(0);
+
+  const cancelCurrentSend = () => {
+    // Soft-cancel: bump token so any in-flight send will be ignored when it resolves.
+    activeSendTokenRef.current += 1;
+    setIsLoading(false);
+  };
 
   // 创建新会话
   const createConversation = async (title: string): Promise<string> => {
@@ -47,7 +71,8 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
       await refreshConversations();
       return conversationId;
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : '创建会话失败';
+      console.error('创建会话失败(原始错误):', err);
+      const errorMessage = getTauriErrorMessage(err, '创建会话失败');
       setError(errorMessage);
       throw new Error(errorMessage);
     } finally {
@@ -64,7 +89,8 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
       const conversation = await invoke<Conversation>('conversation_get', { conversationId: id });
       setCurrentConversation(conversation);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : '加载会话失败';
+      console.error('加载会话失败(原始错误):', err);
+      const errorMessage = getTauriErrorMessage(err, '加载会话失败');
       setError(errorMessage);
       throw new Error(errorMessage);
     } finally {
@@ -74,8 +100,15 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
 
   // 发送消息
   const sendMessage = async (content: string): Promise<void> => {
-    if (!currentConversation) {
-      throw new Error('没有当前会话');
+    const token = ++activeSendTokenRef.current;
+
+    // Ensure a conversation exists (avoid relying on async React state updates).
+    let conversation = currentConversation;
+    if (!conversation) {
+      const conversationId = await invoke<string>('conversation_create', { title: '新的对话' });
+      conversation = await invoke<Conversation>('conversation_get', { conversationId });
+      setCurrentConversation(conversation);
+      await refreshConversations();
     }
 
     setIsLoading(true);
@@ -91,17 +124,22 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
       };
 
       const updatedConversation = {
-        ...currentConversation,
-        messages: [...currentConversation.messages, userMessage],
+        ...conversation,
+        messages: [...conversation.messages, userMessage],
         updated_at: Date.now() / 1000,
       };
       setCurrentConversation(updatedConversation);
 
       // 发送到后端
       const response = await invoke('conversation_send_message', {
-        conversationId: currentConversation.id,
+        conversationId: conversation.id,
         content,
       });
+
+      // If canceled while waiting, ignore the response.
+      if (token !== activeSendTokenRef.current) {
+        return;
+      }
 
       // 添加 AI 响应消息
       const assistantMessage: ConversationMessage = {
@@ -125,14 +163,21 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
       // 更新会话列表
       await refreshConversations();
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : '发送消息失败';
+      console.error('发送消息失败(原始错误):', err);
+      const errorMessage = getTauriErrorMessage(err, '发送消息失败');
       setError(errorMessage);
       
       // 如果发送失败，回滚乐观更新
-      await loadConversation(currentConversation.id);
+      if (token === activeSendTokenRef.current) {
+        if (conversation) {
+          await loadConversation(conversation.id);
+        }
+      }
       throw new Error(errorMessage);
     } finally {
-      setIsLoading(false);
+      if (token === activeSendTokenRef.current) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -152,7 +197,8 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
         setCurrentConversation(null);
       }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : '删除会话失败';
+      console.error('删除会话失败(原始错误):', err);
+      const errorMessage = getTauriErrorMessage(err, '删除会话失败');
       setError(errorMessage);
       throw new Error(errorMessage);
     } finally {
@@ -169,7 +215,8 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
       const conversationList = await invoke<Conversation[]>('conversation_list');
       setConversations(conversationList.sort((a, b) => b.updated_at - a.updated_at));
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : '刷新会话列表失败';
+      console.error('刷新会话列表失败(原始错误):', err);
+      const errorMessage = getTauriErrorMessage(err, '刷新会话列表失败');
       setError(errorMessage);
       throw new Error(errorMessage);
     } finally {
@@ -190,6 +237,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
     createConversation,
     loadConversation,
     sendMessage,
+    cancelCurrentSend,
     deleteConversation,
     refreshConversations,
     setCurrentConversation,

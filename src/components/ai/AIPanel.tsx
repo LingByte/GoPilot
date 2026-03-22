@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Bot, Sparkles, Code, FileText, CheckCircle, AlertTriangle, Settings, Plus, Clock, ArrowLeft } from 'lucide-react';
+import { Bot, Sparkles, Code, FileText, CheckCircle, AlertTriangle, Settings, Plus, Clock, ArrowLeft, X } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/tauri';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -29,6 +29,7 @@ const AIPanelInner: React.FC = () => {
     currentConversation,
     loadConversation,
     sendMessage,
+    cancelCurrentSend,
     deleteConversation,
     isLoading: isConversationLoading
   } = useConversation();
@@ -85,7 +86,7 @@ const AIPanelInner: React.FC = () => {
 
   // 发送消息
   const handleSendMessage = async () => {
-    if (!input.trim() || !currentConversation || isConversationLoading) return;
+    if (!input.trim() || isConversationLoading) return;
 
     const messageContent = input.trim();
     setInput(''); // 立即清空输入框
@@ -102,7 +103,7 @@ const AIPanelInner: React.FC = () => {
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (activeTab === 'chat' && currentConversation) {
+      if (activeTab === 'chat') {
         handleSendMessage();
       } else if (activeTab === 'decompose') {
         decomposeRequirement();
@@ -113,6 +114,10 @@ const AIPanelInner: React.FC = () => {
   // 确保 activeTab 类型正确
   const isChatTab = activeTab === 'chat';
   const isDecomposeTab = activeTab === 'decompose';
+
+  const handleStop = () => {
+    cancelCurrentSend();
+  };
 
   // 如果显示历史记录
   if (showHistory) {
@@ -336,22 +341,16 @@ ${error}
               </button>
             </>
           )}
-          {isConfigured === false && (
+          {!isConfigured && (
             <div className="flex items-center gap-1 text-amber-600">
               <AlertTriangle className="w-4 h-4" />
               <span className="text-xs">未配置</span>
             </div>
           )}
-          {isConfigured === true && (
+          {isConfigured && (
             <div className="flex items-center gap-1 text-green-600">
               <CheckCircle className="w-4 h-4" />
               <span className="text-xs">已连接</span>
-            </div>
-          )}
-          {isConfigured === null && (
-            <div className="flex items-center gap-1 text-gray-400">
-              <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-              <span className="text-xs">检查中</span>
             </div>
           )}
           <button
@@ -529,6 +528,21 @@ ${error}
                 </div>
               </div>
             )}
+
+            {isConversationLoading && (
+              <div className="flex gap-3 justify-start">
+                <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
+                  <Bot className="w-4 h-4 text-blue-600" />
+                </div>
+                <div className="bg-gray-100 rounded-lg px-3 py-2">
+                  <div className="flex items-center gap-1">
+                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
+                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
+                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 输入区域 */}
@@ -540,16 +554,16 @@ ${error}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={handleKeyPress}
                 placeholder={currentConversation ? "输入消息..." : "请先创建会话"}
-                disabled={!currentConversation || isLoading}
+                disabled={isConversationLoading}
                 className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm disabled:opacity-50 disabled:cursor-not-allowed"
               />
               <button
-                onClick={handleSendMessage}
-                disabled={!currentConversation || isLoading || !input.trim()}
+                onClick={isConversationLoading ? handleStop : handleSendMessage}
+                disabled={(!input.trim() && !isConversationLoading)}
                 className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
-                {isLoading ? (
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                {isConversationLoading ? (
+                  <X className="w-4 h-4" />
                 ) : (
                   <Sparkles className="w-4 h-4" />
                 )}

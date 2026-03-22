@@ -72,6 +72,34 @@ struct AppState {
     window_title: String,
 }
 
+// 以 base64 返回远程资源（用于绕过 WebView 的 CORS，如扩展图标）
+#[tauri::command]
+async fn fetch_url_base64(url: String) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("GoPilot/1.0.0")
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("HTTP 错误: {}", resp.status()));
+    }
+
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取响应失败: {}", e))?;
+
+    use base64::{Engine as _, engine::general_purpose};
+    Ok(general_purpose::STANDARD.encode(&bytes))
+}
+
 #[tauri::command]
 async fn extract_vsix(vsix_path: String, dest_dir: String) -> Result<(), String> {
     let dest = Path::new(&dest_dir);
@@ -1620,10 +1648,24 @@ async fn conversation_create(title: String) -> Result<String, String> {
     println!("🔍 创建新会话: {}", title);
     
     // 获取当前 AI 配置
-    let config = AI_CONFIG.lock().await;
-    let ai_config = config.as_ref()
-        .ok_or("AI 配置未设置")?
-        .clone();
+    let ai_config = {
+        let config = AI_CONFIG.lock().await;
+        config.as_ref().cloned()
+    };
+
+    let ai_config = match ai_config {
+        Some(v) => v,
+        None => {
+            println!("⚠️  AI 配置未设置，尝试从环境变量重新加载");
+            let app_config = config::ConfigLoader::load_from_env()
+                .map_err(|e| format!("AI 配置未设置，且重新加载失败: {}", e))?;
+
+            let mut global_config = AI_CONFIG.lock().await;
+            *global_config = Some(app_config.ai.clone());
+            println!("✅ AI 配置已从环境变量重新加载并写入全局变量");
+            app_config.ai
+        }
+    };
     
     let manager = get_conversation_manager();
     let conversation_id = manager.create_conversation(title, ai_config).await?;
@@ -1761,6 +1803,7 @@ fn main() {
             write_file,
             append_file,
             read_directory,
+            fetch_url_base64,
             read_directory_tree,
             create_file,
             create_directory,

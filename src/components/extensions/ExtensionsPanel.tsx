@@ -92,10 +92,30 @@ function ExtensionIcon({
   iconUrl?: string;
 }) {
   const [failed, setFailed] = useState(false);
+  const [iconDataUrl, setIconDataUrl] = useState<string>('');
   const initial = (label || name || '?').trim().slice(0, 1).toUpperCase();
   const url =
     (iconUrl && iconUrl.trim()) ||
     `https://open-vsx.org/api/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/latest/file/icon.png`;
+
+  useEffect(() => {
+    let cancelled = false;
+    setIconDataUrl('');
+    setFailed(false);
+    void (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/tauri');
+        const base64 = (await invoke('fetch_url_base64', { url })) as string;
+        if (cancelled) return;
+        setIconDataUrl(`data:image/png;base64,${base64}`);
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
 
   if (failed) {
     return (
@@ -107,11 +127,9 @@ function ExtensionIcon({
 
   return (
     <img
-      src={url}
+      src={iconDataUrl || ''}
       className="w-8 h-8 rounded border border-gray-200 bg-white shrink-0 object-cover"
       alt=""
-      crossOrigin="anonymous"
-      referrerPolicy="no-referrer"
       onError={() => setFailed(true)}
     />
   );

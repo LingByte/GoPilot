@@ -46,6 +46,18 @@ window.addEventListener('unhandledrejection', (event) => {
     event.preventDefault();
     return false;
   }
+
+  // Monaco (and some editor integrations) may reject promises with a cancellation error during model switches.
+  // This is expected and should not surface as an unhandled rejection.
+  if (
+    errorString === 'Canceled' ||
+    errorString === 'Cancelled' ||
+    errorString.includes('Canceled: Canceled') ||
+    errorString.includes('Cancelled: Cancelled')
+  ) {
+    event.preventDefault();
+    return false;
+  }
 });
 
 initTheme()

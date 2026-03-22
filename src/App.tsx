@@ -21,27 +21,25 @@ import { activateInstalledExtensionsNode } from './extensions/node-runtime';
 import { listenForOutputEvents } from './extensions/output-listener';
 import type { ExtensionContributions } from './extensions/types';
 import Settings from './pages/Settings';
-import { fs } from '@tauri-apps/api';
 import { invoke } from '@tauri-apps/api/tauri';
 
 const EXPLORER_ROOT_KEY = 'gopilot.explorer.rootPath';
 const RECENT_PROJECTS_KEY = 'gopilot.recentProjects';
 
 function pilotOutputLogPath(rootPath: string) {
-    return `${rootPath}\\.pilot\\output.jsonl`;
+    return `${rootPath}/.pilot/output.jsonl`;
 }
 
 function pilotSessionPath(rootPath: string) {
-    return `${rootPath}\\.pilot\\session.json`;
+    return `${rootPath}/.pilot/session.json`;
 }
 
 // 创建 .pilot 索引文件
 async function createPilotIndexFile(rootPath: string) {
     console.log('Creating .pilot file for:', rootPath);
     try {
-        // 保持原始的 Windows 路径格式
-        const pilotDirPath = `${rootPath}\\.pilot`;
-        const pilotIndexPath = `${pilotDirPath}\\index.json`;
+        const pilotDirPath = `${rootPath}/.pilot`;
+        const pilotIndexPath = `${pilotDirPath}/index.json`;
 
         console.log('Original path:', rootPath);
         console.log('Pilot dir path:', pilotDirPath);
@@ -70,6 +68,13 @@ async function createPilotIndexFile(rootPath: string) {
             // ignore
         }
 
+        // 如果之前使用 Windows 风格路径误创建了同名文件/目录，也尝试清理
+        try {
+            await invoke('delete_file', { path: `${rootPath}\\.pilot` });
+        } catch {
+            // ignore
+        }
+
         // 确保 .pilot 目录存在
         await invoke('create_directory', { path: pilotDirPath });
 
@@ -77,22 +82,13 @@ async function createPilotIndexFile(rootPath: string) {
         await invoke('write_file', { path: pilotIndexPath, content: pilotContent });
         console.log('Tauri commands executed successfully');
 
-        // 验证 index.json 是否真的被创建
+        // 验证 index.json 是否真的被创建（使用后端命令，避免前端 FS scope 限制）
         try {
-            const verifyContent = await fs.readTextFile(pilotIndexPath);
-            console.log('File verification successful, size:', verifyContent.length);
-            console.log('File content preview:', verifyContent.substring(0, 100) + '...');
-        } catch (verifyError) {
-            console.error('File verification failed:', verifyError);
-
-            // 尝试使用 Tauri 命令读取验证
-            try {
-                const tauriContent = (await invoke('read_file', { path: pilotIndexPath })) as string;
-                console.log('Tauri file verification successful, size:', tauriContent.length);
-                console.log('Tauri file content preview:', tauriContent.substring(0, 100) + '...');
-            } catch (tauriVerifyError) {
-                console.error('Tauri file verification also failed:', tauriVerifyError);
-            }
+            const tauriContent = (await invoke('read_file', { path: pilotIndexPath })) as string;
+            console.log('Tauri file verification successful, size:', tauriContent.length);
+            console.log('Tauri file content preview:', tauriContent.substring(0, 100) + '...');
+        } catch (tauriVerifyError) {
+            console.error('File verification failed:', tauriVerifyError);
         }
 
         console.log('Successfully updated .pilot index file at:', pilotIndexPath);
@@ -200,7 +196,7 @@ function EditorShell() {
             void (async () => {
                 try {
                     const p = pilotOutputLogPath(rootPath);
-                    await invoke('create_directory', { path: `${rootPath}\\.pilot` });
+                    await invoke('create_directory', { path: `${rootPath}/.pilot` });
                     await invoke('append_file', { path: p, content: line });
                 } catch (e) {
                     console.error('Failed to append output log:', e);
@@ -274,7 +270,7 @@ function EditorShell() {
             if (!rootPath) return;
             void (async () => {
                 try {
-                    await invoke('create_directory', { path: `${rootPath}\\.pilot` });
+                    await invoke('create_directory', { path: `${rootPath}/.pilot` });
                     await invoke('write_file', { path: pilotSessionPath(rootPath), content: JSON.stringify(session, null, 2) });
                 } catch (e) {
                     console.error('Failed to persist session:', e);

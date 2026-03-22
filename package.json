@@ -51,6 +51,7 @@
     "date-fns": "^4.1.0",
     "dompurify": "^3.3.0",
     "framer-motion": "^10.16.16",
+    "highlight.js": "^11.11.1",
     "jszip": "^3.10.1",
     "lottie-web": "^5.12.2",
     "lucide-react": "^0.294.0",

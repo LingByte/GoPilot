@@ -180,9 +180,21 @@ impl AiClient for OpenAIClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
 
+            let body = if error_text.len() > 2000 {
+                format!("{}...(truncated)", &error_text[..2000])
+            } else {
+                error_text
+            };
+
             Err(AiError {
                 code: status.as_str().to_string(),
-                message: error_text,
+                message: format!(
+                    "HTTP {} calling OpenAI-compatible endpoint. url={}, model={}, body={}",
+                    status.as_u16(),
+                    url,
+                    request.model,
+                    body
+                ),
                 r#type: "api_error".to_string(),
             })
         }
@@ -255,9 +267,21 @@ impl AiClient for OpenAIClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
 
+            let body = if error_text.len() > 2000 {
+                format!("{}...(truncated)", &error_text[..2000])
+            } else {
+                error_text
+            };
+
             Err(AiError {
                 code: status.as_str().to_string(),
-                message: error_text,
+                message: format!(
+                    "HTTP {} calling OpenAI-compatible streaming endpoint. url={}, model={}, body={}",
+                    status.as_u16(),
+                    url,
+                    request.model,
+                    body
+                ),
                 r#type: "api_error".to_string(),
             })
         }
@@ -272,7 +296,11 @@ pub struct OllamaClient {
 
 impl OllamaClient {
     pub fn new(config: AiConfig) -> Self {
-        let client = reqwest::Client::new();
+        // Avoid system proxy intercepting localhost calls (common cause of HTTP 502).
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self { client, config }
     }
 }
@@ -339,9 +367,21 @@ impl AiClient for OllamaClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
 
+            let body = if error_text.len() > 2000 {
+                format!("{}...(truncated)", &error_text[..2000])
+            } else {
+                error_text
+            };
+
             Err(AiError {
                 code: status.as_str().to_string(),
-                message: error_text,
+                message: format!(
+                    "HTTP {} calling Ollama endpoint. url={}, model={}, body={}",
+                    status.as_u16(),
+                    url,
+                    request.model,
+                    body
+                ),
                 r#type: "api_error".to_string(),
             })
         }
@@ -434,9 +474,21 @@ impl AiClient for OllamaClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
 
+            let body = if error_text.len() > 2000 {
+                format!("{}...(truncated)", &error_text[..2000])
+            } else {
+                error_text
+            };
+
             Err(AiError {
                 code: status.as_str().to_string(),
-                message: error_text,
+                message: format!(
+                    "HTTP {} calling Ollama streaming endpoint. url={}, model={}, body={}",
+                    status.as_u16(),
+                    url,
+                    request.model,
+                    body
+                ),
                 r#type: "api_error".to_string(),
             })
         }

@@ -1,17 +1,8 @@
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, useImperativeHandle } from 'react';
 import TabsBar, { type EditorTab } from '@/components/editor/TabsBar';
+import { invoke } from '@tauri-apps/api/tauri';
+import { isAudioPath, isImagePath, isMarkdownPath, isPdfPath, isVideoPath, imageMime, audioMime, pdfMime, videoMime } from '@/components/viewers/defaultRenderers';
 import FileViewer from '@/components/viewers/FileViewer';
-import {
-  audioMime,
-  imageMime,
-  isAudioPath,
-  isImagePath,
-  isMarkdownPath,
-  isPdfPath,
-  isVideoPath,
-  pdfMime,
-  videoMime,
-} from '@/components/viewers/defaultRenderers';
 import { setMonacoProjectConfig } from './monacoProject';
 import { applyPdfAnnotations } from '@/components/viewers/PdfEditorViewer';
 import ContextMenu, { type ContextMenuItem } from '@/components/layouts/ContextMenu';
@@ -127,8 +118,19 @@ function binaryMime(path: string) {
 }
 
 async function readBytes(path: string) {
-  const fs = await import('@tauri-apps/api/fs');
-  return await fs.readBinaryFile(path);
+  // Prefer backend command to avoid frontend FS scope restrictions.
+  try {
+    const base64 = (await invoke('read_binary_file', { path })) as string;
+    const binStr = atob(base64);
+    const bytes = new Uint8Array(binStr.length);
+    for (let i = 0; i < binStr.length; i++) {
+      bytes[i] = binStr.charCodeAt(i) & 0xff;
+    }
+    return bytes;
+  } catch {
+    const fs = await import('@tauri-apps/api/fs');
+    return await fs.readBinaryFile(path);
+  }
 }
 
 function bytesToAssetUrl(bytes: Uint8Array, mime: string) {
