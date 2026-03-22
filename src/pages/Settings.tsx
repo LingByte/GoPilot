@@ -17,7 +17,7 @@ type SettingSection = {
   description?: string;
 };
 
-export default function Settings() {
+export default function Settings({ onClose }: { onClose?: () => void }) {
   const navigate = useNavigate();
   const sections: SettingSection[] = useMemo(
     () => [
@@ -51,7 +51,13 @@ export default function Settings() {
           <button
             type="button"
             className="text-xs px-3 py-1.5 rounded border border-gray-200 hover:bg-gray-50 active:bg-gray-100"
-            onClick={() => navigate('/')}
+            onClick={() => {
+              if (onClose) {
+                onClose();
+              } else {
+                navigate('/');
+              }
+            }}
           >
             Back
           </button>

@@ -38,6 +38,13 @@ export type EditorWorkspaceHandle = {
   openFile: (path: string) => Promise<void>;
   openFileAt: (path: string, line: number, column?: number) => Promise<void>;
   saveActive: () => Promise<void>;
+  restoreSession: (openPaths: string[], activePath?: string) => Promise<void>;
+};
+
+type EditorWorkspaceProps = {
+  onSessionChange?: (session: { openPaths: string[]; activePath: string | null }) => void;
+  recentProjects?: string[];
+  onOpenRecentProject?: (path: string) => void;
 };
 
 function getFileName(path: string) {
@@ -152,7 +159,10 @@ async function writeBytes(path: string, bytes: Uint8Array) {
 
 const EMPTY_PDF_EDIT_STATE = JSON.stringify({ version: 1, annotations: [] });
 
-const EditorWorkspace = forwardRef<EditorWorkspaceHandle>(function EditorWorkspace(_props, ref) {
+const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(function EditorWorkspace(
+  { onSessionChange, recentProjects, onOpenRecentProject }: EditorWorkspaceProps,
+  ref,
+) {
   const [tabs, setTabs] = useState<TabState[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [ctx, setCtx] = useState<{ open: boolean; x: number; y: number; tabId: string | null }>({
@@ -167,6 +177,15 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle>(function EditorWorkspa
   useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
+
+  useEffect(() => {
+    if (!onSessionChange) return;
+    const active = tabs.find((t) => t.id === activeId) ?? null;
+    onSessionChange({
+      openPaths: tabs.map((t) => t.path).filter(Boolean),
+      activePath: active?.path ?? null,
+    });
+  }, [activeId, onSessionChange, tabs]);
 
   const activeTab = useMemo(() => tabs.find((t) => t.id === activeId) ?? null, [tabs, activeId]);
 
@@ -277,6 +296,20 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle>(function EditorWorkspa
       setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, value: msg, savedValue: msg, viewerId: 'binary', readOnly: true } : t)));
     }
   }, []);
+
+  const restoreSession = useCallback(
+    async (openPaths: string[], activePath?: string) => {
+      const uniq = Array.from(new Set((openPaths ?? []).filter(Boolean)));
+      for (const p of uniq) {
+        await openFile(p);
+      }
+      if (activePath) {
+        const t = tabsRef.current.find((x) => x.path === activePath);
+        if (t) setActiveId(t.id);
+      }
+    },
+    [openFile],
+  );
 
   const openFileAt = useCallback(
     async (path: string, line: number, column?: number) => {
@@ -561,7 +594,7 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle>(function EditorWorkspa
     [tabs],
   );
 
-  useImperativeHandle(ref, () => ({ openFile, openFileAt, saveActive }), [openFile, openFileAt, saveActive]);
+  useImperativeHandle(ref, () => ({ openFile, openFileAt, saveActive, restoreSession }), [openFile, openFileAt, saveActive, restoreSession]);
 
   const keyHandlerRef = useRef<(e: KeyboardEvent) => void>();
   useEffect(() => {
@@ -616,8 +649,29 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle>(function EditorWorkspa
             onChange={onChangeValue}
           />
         ) : (
-          <div className="h-full flex items-center justify-center text-sm text-gray-500">
-            Open a file from Explorer.
+          <div className="h-full flex items-center justify-center">
+            <div className="w-[520px] max-w-[92%]">
+              <div className="text-sm font-medium text-gray-700 mb-2">Recent Projects</div>
+              {Array.isArray(recentProjects) && recentProjects.length > 0 ? (
+                <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
+                  {recentProjects.slice(0, 12).map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 active:bg-gray-100 border-b border-gray-100 last:border-b-0"
+                      onClick={() => onOpenRecentProject?.(p)}
+                      title={p}
+                    >
+                      <div className="truncate text-gray-800">{p}</div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-gray-500">No recent projects.</div>
+              )}
+
+              <div className="mt-4 text-xs text-gray-400">Open a file from Explorer to start editing.</div>
+            </div>
           </div>
         )}
       </div>

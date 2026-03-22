@@ -2,7 +2,7 @@ import GlobalHeader from '@/components/layouts/GlobalHeader';
 import ActivityBar, { type ActivityBarItem } from '@/components/layouts/ActivityBar';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Files, Search, GitBranch } from 'lucide-react';
-import { Route, Routes, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import ExplorerTree from '@/components/explorer/ExplorerTree';
 import EditorWorkspace, { type EditorWorkspaceHandle } from '@/components/editor/EditorWorkspace';
 import { ViewerRegistryProvider } from '@/components/viewers/ViewerRegistry';
@@ -22,9 +22,14 @@ import { fs } from '@tauri-apps/api';
 import { invoke } from '@tauri-apps/api/tauri';
 
 const EXPLORER_ROOT_KEY = 'gopilot.explorer.rootPath';
+const RECENT_PROJECTS_KEY = 'gopilot.recentProjects';
 
 function pilotOutputLogPath(rootPath: string) {
     return `${rootPath}\\.pilot\\output.jsonl`;
+}
+
+function pilotSessionPath(rootPath: string) {
+    return `${rootPath}\\.pilot\\session.json`;
 }
 
 // 创建 .pilot 索引文件
@@ -93,12 +98,27 @@ async function createPilotIndexFile(rootPath: string) {
     }
 }
 
+type WorkspaceSession = {
+    openPaths: string[];
+    activePath: string | null;
+};
+
 function App() {
+    const location = useLocation();
+    const navigate = useNavigate();
+    const showSettings = location.pathname === '/settings';
+
     return (
-        <Routes>
-            <Route path="/" element={<EditorShell />} />
-            <Route path="/settings" element={<Settings />} />
-        </Routes>
+        <>
+            <EditorShell />
+            {showSettings ? (
+                <div className="fixed inset-0 z-50 bg-black/30">
+                    <div className="absolute inset-4 bg-white rounded-lg shadow-xl overflow-hidden">
+                        <Settings onClose={() => navigate('/')} />
+                    </div>
+                </div>
+            ) : null}
+        </>
     );
 }
 
@@ -112,6 +132,7 @@ function EditorShell() {
     const [activeId, setActiveId] = useState(baseItems[0]?.id ?? 'explorer');
     const workspaceRef = useRef<EditorWorkspaceHandle>(null);
     const [rootPath, setRootPath] = useState('');
+    const [recentProjects, setRecentProjects] = useState<string[]>([]);
     const [bottomOpen, setBottomOpen] = useState(false);
     const [bottomTab, setBottomTab] = useState<'problems' | 'output' | 'terminal'>('terminal');
     const [bottomHeight, setBottomHeight] = useState(260);
@@ -219,6 +240,53 @@ function EditorShell() {
         [loadOutputLog],
     );
 
+    const addRecentProject = useCallback((p: string) => {
+        const next = [p, ...recentProjects.filter((x) => x !== p)].slice(0, 12);
+        setRecentProjects(next);
+        try {
+            localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(next));
+        } catch {
+            return;
+        }
+    }, [recentProjects]);
+
+    const openRecentProject = useCallback(async (p: string) => {
+        if (!p) return;
+        await handleRootPathChange(p);
+        addRecentProject(p);
+        setActiveId('explorer');
+    }, [addRecentProject, handleRootPathChange]);
+
+    const persistSession = useCallback(
+        (session: WorkspaceSession) => {
+            if (!rootPath) return;
+            void (async () => {
+                try {
+                    await invoke('create_directory', { path: `${rootPath}\\.pilot` });
+                    await invoke('write_file', { path: pilotSessionPath(rootPath), content: JSON.stringify(session, null, 2) });
+                } catch (e) {
+                    console.error('Failed to persist session:', e);
+                }
+            })();
+        },
+        [rootPath],
+    );
+
+    const restoreSession = useCallback(async () => {
+        if (!rootPath) return;
+        try {
+            const raw = await invoke('read_file', { path: pilotSessionPath(rootPath) });
+            if (typeof raw !== 'string' || !raw) return;
+            const parsed = JSON.parse(raw) as WorkspaceSession;
+            const openPaths = Array.isArray(parsed?.openPaths) ? parsed.openPaths.filter(Boolean) : [];
+            const activePath = typeof parsed?.activePath === 'string' ? parsed.activePath : null;
+            if (openPaths.length === 0) return;
+            await workspaceRef.current?.restoreSession(openPaths, activePath ?? undefined);
+        } catch {
+            return;
+        }
+    }, [rootPath]);
+
     useEffect(() => {
         const onExtOutput = (e: any) => {
             const title = e?.detail?.title ? String(e.detail.title) : 'Extension';
@@ -236,6 +304,16 @@ function EditorShell() {
     useEffect(() => {
         const saved = localStorage.getItem(EXPLORER_ROOT_KEY);
         if (saved) setRootPath(saved);
+    }, []);
+
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem(RECENT_PROJECTS_KEY);
+            const list = raw ? JSON.parse(raw) : [];
+            if (Array.isArray(list)) setRecentProjects(list.filter(Boolean));
+        } catch {
+            return;
+        }
     }, []);
 
     useEffect(() => {
@@ -259,6 +337,7 @@ function EditorShell() {
                         await fs.readDir(candidate, { recursive: false });
                         console.log('Setting root path to:', candidate);
                         setRootPath(candidate);
+                        addRecentProject(candidate);
                         console.log('About to create .pilot file...');
                         await createPilotIndexFile(candidate); // 创建 .pilot 文件
                         await loadOutputLog();
@@ -292,6 +371,10 @@ function EditorShell() {
     }, [rootPath]);
 
     useEffect(() => {
+        void restoreSession();
+    }, [restoreSession]);
+
+    useEffect(() => {
         void loadOutputLog();
     }, [loadOutputLog]);
 
@@ -311,6 +394,7 @@ function EditorShell() {
                         await fs.readDir(candidate, { recursive: false });
                         console.log('Setting root path to:', candidate);
                         setRootPath(candidate);
+                        addRecentProject(candidate);
                         console.log('About to create .pilot file...');
                         await createPilotIndexFile(candidate); // 创建 .pilot 文件
                         await loadOutputLog();
@@ -381,7 +465,12 @@ function EditorShell() {
 
                     <div className="flex-1 min-h-0 flex flex-col">
                         <div className="flex-1 min-h-0">
-                            <EditorWorkspace ref={workspaceRef} />
+                            <EditorWorkspace
+                                ref={workspaceRef}
+                                onSessionChange={(session: WorkspaceSession) => persistSession(session)}
+                                recentProjects={recentProjects}
+                                onOpenRecentProject={(p: string) => void openRecentProject(p)}
+                            />
                         </div>
                         <BottomPanel
                             open={bottomOpen}
