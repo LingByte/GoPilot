@@ -6,6 +6,8 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { Play, Database as DatabaseIcon, AlertCircle, CheckCircle, Terminal } from 'lucide-react';
 import VideoViewer from './VideoViewer';
 import MarkdownViewer from './MarkdownViewer';
+import PdfEditorViewer from './PdfEditorViewer';
+import ImageEditorViewer from './ImageEditorViewer';
 
 function ext(path: string) {
   const idx = path.lastIndexOf('.');
@@ -76,10 +78,13 @@ const imageRenderer: FileViewerRenderer = {
   id: 'image',
   label: 'Image',
   match: isImagePath,
-  render: ({ tab }: FileViewerRenderParams) => (
-    <div className="flex items-center justify-center h-full p-4">
-      <img src={tab.path} alt={tab.title} className="max-w-full max-h-full object-contain" />
-    </div>
+  render: ({ tab, onChange, assetUrl }: FileViewerRenderParams) => (
+    <ImageEditorViewer 
+      assetUrl={assetUrl}
+      value={tab.value}
+      onChange={onChange}
+      readOnly={tab.readOnly}
+    />
   ),
 };
 
@@ -457,12 +462,13 @@ export const pdfRenderer: FileViewerRenderer = {
     const e = ext(path);
     return e === 'pdf';
   },
-  render: ({ tab }: FileViewerRenderParams) => (
-    <div className="p-4 h-full overflow-auto">
-      <div className="text-center text-gray-500">
-        PDF Viewer: {tab.path}
-      </div>
-    </div>
+  render: ({ tab, onChange, assetUrl }: FileViewerRenderParams) => (
+    <PdfEditorViewer 
+      assetUrl={assetUrl}
+      value={tab.value}
+      onChange={onChange}
+      readOnly={tab.readOnly}
+    />
   ),
 };
 

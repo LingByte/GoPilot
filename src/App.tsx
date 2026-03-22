@@ -493,8 +493,8 @@ function EditorShell() {
                         </div>
                     ))}
 
-                    <div className="flex-1 min-h-0 flex flex-col">
-                        <div className="flex-1 min-h-0">
+                    <div className="flex-1 min-h-0 flex flex-col w-full overflow-hidden">
+                        <div className="flex-1 min-h-0 w-full overflow-hidden">
                             <EditorWorkspace
                                 ref={workspaceRef}
                                 onSessionChange={(session: WorkspaceSession) => persistSession(session)}

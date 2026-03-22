@@ -167,71 +167,70 @@ export default function ResizableRightPanel({
         />
       )}
       
-      {/* 面板内容 */}
-      <aside 
-        className="border-l border-gray-200 bg-white flex flex-col transition-all duration-300 ease-in-out relative shadow-lg"
-        style={{ 
-          width: isCollapsed ? 0 : currentWidth,
-          minWidth: isCollapsed ? 0 : (activePanel?.minWidth || 200),
-          display: isCollapsed ? 'none' : 'flex',
-          opacity: isCollapsed ? 0 : 1,
-          transform: isCollapsed ? 'translateX(100%)' : 'translateX(0)',
-          zIndex: isDragging ? 51 : 'auto'
-        }}
-      >
-        {/* 面板头部 */}
-        <div className="h-10 px-3 flex items-center justify-between border-b border-gray-200 flex-shrink-0">
-          <div className="text-sm font-medium text-gray-800 truncate">
-            {activePanel.title}
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              className="p-1.5 rounded-md hover:bg-gray-100 active:bg-gray-200"
-              onClick={toggleCollapse}
-              aria-label="Collapse"
-              title="Collapse panel"
-            >
-              <ChevronRight className="w-4 h-4 text-gray-600" />
-            </button>
-            <button
-              type="button"
-              className="p-1.5 rounded-md hover:bg-gray-100 active:bg-gray-200"
-              onClick={() => onActiveChange(null)}
-              aria-label="Close"
-              title="Close panel"
-            >
-              <X className="w-4 h-4 text-gray-600" />
-            </button>
-          </div>
-        </div>
-
-        {/* 面板内容 */}
-        <div className="flex-1 min-h-0 overflow-auto">
-          {activePanel.children}
-        </div>
-
-        {/* 调整大小的拖拽条 */}
-        <div
-          className={`absolute left-0 top-0 bottom-0 w-1 transition-all duration-200 z-10 group ${
-            isDragging 
-              ? 'bg-blue-500 cursor-ew-resizing' 
-              : 'bg-gray-300 hover:bg-blue-500 hover:opacity-70 cursor-ew-resize'
-          }`}
-          onMouseDown={handleMouseDown}
+      {/* 面板内容 - 只在有活跃面板时显示 */}
+      {activeId && !isCollapsed && (
+        <aside 
+          className="border-l border-gray-200 bg-white flex flex-col transition-all duration-300 ease-in-out relative shadow-lg"
           style={{ 
-            left: -2, // 稍微扩展点击区域
-            width: isDragging ? 6 : 4
+            width: currentWidth,
+            minWidth: activePanel?.minWidth || 200,
+            zIndex: isDragging ? 51 : 'auto'
           }}
         >
-          {/* 拖拽指示器 */}
-          <div className={`absolute left-0 top-1/2 transform -translate-y-1/2 w-0.5 h-6 rounded-full transition-colors duration-200 ${
-            isDragging ? 'bg-blue-300' : 'bg-gray-400 group-hover:bg-blue-400'
-          }`} />
-        </div>
-      </aside>
+          {/* 面板头部 */}
+          <div className="h-10 px-3 flex items-center justify-between border-b border-gray-200 flex-shrink-0">
+            <div className="text-sm font-medium text-gray-800 truncate">
+              {activePanel.title}
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className="p-1.5 rounded-md hover:bg-gray-100 active:bg-gray-200"
+                onClick={toggleCollapse}
+                aria-label="Collapse"
+                title="Collapse panel"
+              >
+                <ChevronRight className="w-4 h-4 text-gray-600" />
+              </button>
+              <button
+                type="button"
+                className="p-1.5 rounded-md hover:bg-gray-100 active:bg-gray-200"
+                onClick={() => onActiveChange(null)}
+                aria-label="Close"
+                title="Close panel"
+              >
+                <X className="w-4 h-4 text-gray-600" />
+              </button>
+            </div>
+          </div>
 
-      {/* ActivityBar */}
+          {/* 面板内容 */}
+          <div className="flex-1 min-h-0 overflow-auto">
+            {activePanel.children}
+          </div>
+
+          {/* 调整大小的拖拽条 */}
+          <div
+            className={`absolute left-0 top-0 bottom-0 w-1 transition-all duration-200 z-10 group ${
+              isDragging 
+                ? 'bg-blue-500 cursor-ew-resizing' 
+                : 'bg-gray-300 hover:bg-blue-500 hover:opacity-70 cursor-ew-resize'
+            }`}
+            onMouseDown={handleMouseDown}
+            style={{ 
+              left: -2, // 稍微扩展点击区域
+              width: isDragging ? 6 : 4
+            }}
+          >
+            {/* 拖拽指示器 */}
+            <div className={`absolute left-0 top-1/2 transform -translate-y-1/2 w-0.5 h-6 rounded-full transition-colors duration-200 ${
+              isDragging ? 'bg-blue-300' : 'bg-gray-400 group-hover:bg-blue-400'
+            }`} />
+          </div>
+        </aside>
+      )}
+
+      {/* ActivityBar - 始终显示 */}
       <RightActivityBar 
         items={items} 
         activeId={activeId} 

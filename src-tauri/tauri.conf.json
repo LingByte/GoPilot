@@ -18,7 +18,9 @@
         "scope": [
           "$APPDATA/**",
           "$DESKTOP/**",
-          "$HOME/**"
+          "$HOME/**",
+          "$RESOURCE/**",
+          "**"
         ]
       },
       "path": {
@@ -70,7 +72,7 @@
       }
     },
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost:; media-src 'self' asset: http://asset.localhost:;"
     },
     "macOSPrivateApi": true,
     "windows": [

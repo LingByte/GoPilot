@@ -1039,7 +1039,7 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
   }), [openFile, _openFileAt, openSqlConsole, _saveActive, _restoreSession]);
 
   return (
-    <div className="h-full flex flex-col bg-gray-50">
+    <div className="h-full flex flex-col bg-gray-50 w-full overflow-hidden">
       <TabsBar
         tabs={editorTabs}
         activeId={activeId}
