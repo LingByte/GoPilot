@@ -133,6 +133,7 @@ export const textRenderer: FileViewerRenderer = {
       value={tab.value}
       onChange={onChange}
       language={tab.language}
+      path={tab.path}
       height="100%"
       readOnly={tab.readOnly}
       reveal={tab.reveal ? { line: tab.reveal.line, column: tab.reveal.column || 1 } : undefined}

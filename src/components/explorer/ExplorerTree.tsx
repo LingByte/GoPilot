@@ -22,6 +22,8 @@ type TreeNode = {
   loaded?: boolean;
 };
 
+type RevealInExplorerEvent = CustomEvent<{ path?: string }>;
+
 export type ExplorerTreeProps = {
   onOpenFile?: (path: string) => void;
   rootPath?: string;
@@ -58,6 +60,20 @@ function dirname(p: string) {
   const sep = p.includes('\\') ? '\\' : '/';
   const prefix = /^[a-zA-Z]:/.test(p) ? parts[0] + sep : p.startsWith(sep) ? sep : '';
   return prefix + parts.slice(1, -1).join(sep);
+}
+
+function isPathInsideRoot(root: string, p: string) {
+  if (!root || !p) return false;
+  const rootNorm = root.replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
+  const pNorm = p.replace(/\\/g, '/').toLowerCase();
+  return pNorm === rootNorm || pNorm.startsWith(rootNorm + '/');
+}
+
+function relativeSegments(root: string, p: string) {
+  const rootNorm = root.replace(/\\/g, '/').replace(/\/+$/, '');
+  const pNorm = p.replace(/\\/g, '/');
+  const rel = pNorm.slice(rootNorm.length).replace(/^\//, '');
+  return rel.split('/').filter(Boolean);
 }
 
 function getExt(p: string) {
@@ -389,6 +405,49 @@ export default function ExplorerTree({ onOpenFile, rootPath: controlledRootPath,
       });
     }
   }, [tree, loadingDirs]);
+
+  useEffect(() => {
+    if (!effectiveRootPath) return;
+    if (!tree) return;
+
+    const handler = (evt: Event) => {
+      const e = evt as RevealInExplorerEvent;
+      const targetPath = e?.detail?.path;
+      if (!targetPath) return;
+      if (!isPathInsideRoot(effectiveRootPath, targetPath)) return;
+
+      const segs = relativeSegments(effectiveRootPath, targetPath);
+      if (segs.length === 0) return;
+
+      const fileDir = dirname(targetPath);
+      const dirSegs = relativeSegments(effectiveRootPath, fileDir);
+
+      void (async () => {
+        let current = effectiveRootPath;
+        setExpanded((prev) => ({ ...prev, [effectiveRootPath]: true }));
+
+        for (const seg of dirSegs) {
+          await ensureDirLoaded(current);
+          current = joinPath(current, seg);
+          setExpanded((prev) => ({ ...prev, [current]: true }));
+        }
+      })();
+    };
+
+    try {
+      window.addEventListener('gopilot:revealInExplorer', handler as any);
+    } catch {
+      return;
+    }
+
+    return () => {
+      try {
+        window.removeEventListener('gopilot:revealInExplorer', handler as any);
+      } catch {
+        // ignore
+      }
+    };
+  }, [effectiveRootPath, ensureDirLoaded, tree]);
 
   const headerTitle = useMemo(() => {
     if (!effectiveRootPath) return 'Explorer';

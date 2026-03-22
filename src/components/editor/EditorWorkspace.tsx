@@ -12,6 +12,7 @@ import {
   pdfMime,
   videoMime,
 } from '@/components/viewers/defaultRenderers';
+import { setMonacoProjectConfig } from './monacoProject';
 import { applyPdfAnnotations } from '@/components/viewers/PdfEditorViewer';
 import ContextMenu, { type ContextMenuItem } from '@/components/layouts/ContextMenu';
 
@@ -45,11 +46,34 @@ type EditorWorkspaceProps = {
   onSessionChange?: (session: { openPaths: string[]; activePath: string | null }) => void;
   recentProjects?: string[];
   onOpenRecentProject?: (path: string) => void;
+  projectRoot?: string;
 };
 
 function getFileName(path: string) {
   const parts = path.split(/[/\\]/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
+}
+
+async function resolveAliasCandidates(spec: string, rules: Array<{ prefix: string; targetPrefixAbs: string }>) {
+  for (const r of rules) {
+    if (spec === r.prefix || spec.startsWith(r.prefix + '/')) {
+      const rest = spec === r.prefix ? '' : spec.slice(r.prefix.length + 1);
+      const raw = rest ? joinPath2(r.targetPrefixAbs, rest) : r.targetPrefixAbs;
+      return [
+        raw,
+        `${raw}.ts`,
+        `${raw}.tsx`,
+        `${raw}.js`,
+        `${raw}.jsx`,
+        `${raw}.json`,
+        joinPath2(raw, 'index.ts'),
+        joinPath2(raw, 'index.tsx'),
+        joinPath2(raw, 'index.js'),
+        joinPath2(raw, 'index.jsx'),
+      ];
+    }
+  }
+  return [] as string[];
 }
 
 function inferLanguage(path: string) {
@@ -147,6 +171,194 @@ async function readText(path: string) {
   return decodeText(bytes);
 }
 
+function dirnamePath(p: string) {
+  const parts = p.split(/[/\\]/);
+  parts.pop();
+  return parts.join(p.includes('\\') ? '\\' : '/');
+}
+
+function joinPath2(dir: string, child: string) {
+  const sep = dir.includes('\\') ? '\\' : '/';
+  const d = dir.endsWith(sep) ? dir.slice(0, -1) : dir;
+  const c = child.startsWith('/') || child.startsWith('\\') ? child.slice(1) : child;
+  return normalizePath(`${d}${sep}${c}`);
+}
+
+function normalizePath(p: string) {
+  const usesBackslash = p.includes('\\');
+  const sep = usesBackslash ? '\\' : '/';
+  const parts = p.replace(/\\/g, '/').split('/');
+  const stack: string[] = [];
+
+  for (const part of parts) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      if (stack.length > 0 && stack[stack.length - 1] !== '..') stack.pop();
+      else stack.push('..');
+      continue;
+    }
+    stack.push(part);
+  }
+
+  const joined = stack.join(sep);
+  return usesBackslash ? joined : joined;
+}
+
+function normalizeTsconfigPathValue(v: string) {
+  if (!v) return v;
+  if (v.startsWith('./')) return v.slice(2);
+  if (v.startsWith('.\\')) return v.slice(2);
+  return v;
+}
+
+function isScriptLike(lang: string) {
+  return ['javascript', 'typescript'].includes(lang);
+}
+
+function extractImports(source: string) {
+  const out = new Set<string>();
+  const re = /(?:import|export)\s+(?:[^'"\n]+\s+from\s+)?["']([^"']+)["']|require\(\s*["']([^"']+)["']\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source))) {
+    const spec = (m[1] ?? m[2] ?? '').trim();
+    if (!spec) continue;
+    out.add(spec);
+  }
+  return Array.from(out);
+}
+
+async function ensureMonacoModel(filePath: string, content: string) {
+  const monaco = await import('monaco-editor');
+  const uri = monaco.Uri.file(filePath);
+  const existing = monaco.editor.getModel(uri);
+  if (existing) return;
+  const language = inferLanguage(filePath);
+  monaco.editor.createModel(content, language, uri);
+}
+
+async function ensureMonacoModelFromDisk(filePath: string) {
+  const text = await readText(filePath);
+  await ensureMonacoModel(filePath, text);
+  return text;
+}
+
+async function preloadImportGraph(opts: {
+  entryPath: string;
+  entrySource: string;
+  language: string;
+  projectRoot?: string;
+  aliasRules: Array<{ prefix: string; targetPrefixAbs: string }>;
+  visited: Set<string>;
+  maxFiles: number;
+}) {
+  if (!isScriptLike(opts.language)) return;
+  if (opts.visited.size >= opts.maxFiles) return;
+
+  const key = normalizePath(opts.entryPath);
+  if (opts.visited.has(key)) return;
+  opts.visited.add(key);
+
+  const baseDir = dirnamePath(opts.entryPath);
+  const specs = extractImports(opts.entrySource);
+
+  for (const spec of specs) {
+    let candidates: string[] = [];
+    if (spec.startsWith('.')) {
+      candidates = await resolveImportFile(baseDir, spec);
+    } else if (opts.projectRoot && (spec.startsWith('@/') || spec.startsWith('@'))) {
+      candidates = await resolveAliasCandidates(spec, opts.aliasRules);
+    } else {
+      continue;
+    }
+
+    if (candidates.length === 0) continue;
+
+    for (const c of candidates) {
+      const candidatePath = normalizePath(c);
+      if (opts.visited.has(candidatePath)) {
+        break;
+      }
+
+      try {
+        const importedText = await ensureMonacoModelFromDisk(candidatePath);
+        const importedLang = inferLanguage(candidatePath);
+        await preloadImportGraph({
+          entryPath: candidatePath,
+          entrySource: importedText,
+          language: importedLang,
+          projectRoot: opts.projectRoot,
+          aliasRules: opts.aliasRules,
+          visited: opts.visited,
+          maxFiles: opts.maxFiles,
+        });
+        break;
+      } catch {
+        continue;
+      }
+    }
+
+    if (opts.visited.size >= opts.maxFiles) return;
+  }
+}
+
+async function preloadImportsForFile(opts: {
+  filePath: string;
+  source: string;
+  language: string;
+  projectRoot?: string;
+  aliasRules: Array<{ prefix: string; targetPrefixAbs: string }>;
+}) {
+  if (!isScriptLike(opts.language)) return;
+
+  const visited = new Set<string>();
+  await preloadImportGraph({
+    entryPath: opts.filePath,
+    entrySource: opts.source,
+    language: opts.language,
+    projectRoot: opts.projectRoot,
+    aliasRules: opts.aliasRules,
+    visited,
+    maxFiles: 200,
+  });
+}
+
+async function preloadImportsForOpenTabs(opts: {
+  tabs: Array<{ path: string; value: string; language: string }>;
+  projectRoot?: string;
+  aliasRules: Array<{ prefix: string; targetPrefixAbs: string }>;
+}) {
+  for (const t of opts.tabs) {
+    try {
+      await preloadImportsForFile({
+        filePath: t.path,
+        source: t.value,
+        language: t.language,
+        projectRoot: opts.projectRoot,
+        aliasRules: opts.aliasRules,
+      });
+    } catch {
+      continue;
+    }
+  }
+}
+
+async function resolveImportFile(baseDir: string, spec: string) {
+  const raw = joinPath2(baseDir, spec);
+  const candidates = [
+    raw,
+    `${raw}.ts`,
+    `${raw}.tsx`,
+    `${raw}.js`,
+    `${raw}.jsx`,
+    `${raw}.json`,
+    joinPath2(raw, 'index.ts'),
+    joinPath2(raw, 'index.tsx'),
+    joinPath2(raw, 'index.js'),
+    joinPath2(raw, 'index.jsx'),
+  ];
+  return candidates;
+}
+
 async function writeText(path: string, content: string) {
   const fs = await import('@tauri-apps/api/fs');
   await fs.writeFile({ path, contents: content });
@@ -160,7 +372,7 @@ async function writeBytes(path: string, bytes: Uint8Array) {
 const EMPTY_PDF_EDIT_STATE = JSON.stringify({ version: 1, annotations: [] });
 
 const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(function EditorWorkspace(
-  { onSessionChange, recentProjects, onOpenRecentProject }: EditorWorkspaceProps,
+  { onSessionChange, recentProjects, onOpenRecentProject, projectRoot }: EditorWorkspaceProps,
   ref,
 ) {
   const [tabs, setTabs] = useState<TabState[]>([]);
@@ -173,6 +385,113 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
   });
   const tabsRef = useRef<TabState[]>([]);
   const restoreActivePathRef = useRef<string>('');
+  const aliasRulesRef = useRef<Array<{ prefix: string; targetPrefixAbs: string }>>([]);
+  const projectRootRef = useRef<string>('');
+
+  useEffect(() => {
+    projectRootRef.current = projectRoot ?? '';
+  }, [projectRoot]);
+
+  useEffect(() => {
+    if (!projectRoot) {
+      aliasRulesRef.current = [];
+      return;
+    }
+
+    void (async () => {
+      try {
+        const tryPaths = [joinPath2(projectRoot, 'tsconfig.json'), joinPath2(projectRoot, 'jsconfig.json')];
+        let raw: string | null = null;
+        for (const p of tryPaths) {
+          try {
+            raw = await readText(p);
+            if (raw) break;
+          } catch {
+            continue;
+          }
+        }
+        if (!raw) {
+          aliasRulesRef.current = [{ prefix: '@', targetPrefixAbs: normalizePath(projectRoot) }];
+
+          try {
+            setMonacoProjectConfig({
+              baseUrl: (await import('monaco-editor')).Uri.file(normalizePath(projectRoot)).toString(true),
+              paths: { '@/*': ['*'] },
+              projectRootAbs: normalizePath(projectRoot),
+              sourceRootAbs: normalizePath(joinPath2(projectRoot, 'src')),
+            });
+          } catch {
+            // ignore
+          }
+          return;
+        }
+
+        const json = JSON.parse(raw) as any;
+        const baseUrl = typeof json?.compilerOptions?.baseUrl === 'string' ? String(json.compilerOptions.baseUrl) : '.';
+        const pathsObj = json?.compilerOptions?.paths && typeof json.compilerOptions.paths === 'object' ? json.compilerOptions.paths : null;
+        const rules: Array<{ prefix: string; targetPrefixAbs: string }> = [];
+        if (pathsObj) {
+          for (const key of Object.keys(pathsObj)) {
+            const arr = pathsObj[key];
+            if (!Array.isArray(arr) || typeof arr[0] !== 'string') continue;
+            const target = normalizeTsconfigPathValue(arr[0] as string);
+            if (!key.endsWith('/*') || !target.endsWith('/*')) continue;
+            const prefix = key.slice(0, -2);
+            const targetPrefix = target.slice(0, -2);
+            const abs = normalizePath(joinPath2(joinPath2(projectRoot, baseUrl), targetPrefix));
+            rules.push({ prefix, targetPrefixAbs: abs });
+          }
+        }
+
+        // Fallback alias when config doesn't declare @/*: treat @ as project root
+        if (!rules.some((r) => r.prefix === '@')) {
+          rules.push({ prefix: '@', targetPrefixAbs: normalizePath(projectRoot) });
+        }
+        aliasRulesRef.current = rules;
+
+        // Also inform Monaco TS about baseUrl/paths so diagnostics can resolve aliases.
+        try {
+          const monaco = await import('monaco-editor');
+          const baseAbs = normalizePath(joinPath2(projectRoot, baseUrl));
+          const paths: Record<string, string[]> = {};
+          if (pathsObj) {
+            for (const key of Object.keys(pathsObj)) {
+              const arr = pathsObj[key];
+              if (!Array.isArray(arr)) continue;
+              paths[key] = (arr.filter((x) => typeof x === 'string') as string[]).map(normalizeTsconfigPathValue);
+            }
+          }
+          if (!paths['@/*']) {
+            paths['@/*'] = ['*'];
+          }
+          setMonacoProjectConfig({
+            baseUrl: monaco.Uri.file(baseAbs).toString(true),
+            paths,
+            projectRootAbs: normalizePath(projectRoot),
+            sourceRootAbs: normalizePath(joinPath2(projectRoot, 'src')),
+          });
+        } catch {
+          // ignore
+        }
+
+        // Re-preload imports for already-open files (session restore may open tabs before alias rules are ready).
+        try {
+          const openTabs = tabsRef.current
+            .filter((t) => isScriptLike(t.language))
+            .map((t) => ({ path: t.path, value: t.value, language: t.language }));
+          void preloadImportsForOpenTabs({
+            tabs: openTabs,
+            projectRoot: projectRootRef.current,
+            aliasRules: aliasRulesRef.current,
+          });
+        } catch {
+          // ignore
+        }
+      } catch {
+        aliasRulesRef.current = [];
+      }
+    })();
+  }, [projectRoot]);
 
   useEffect(() => {
     tabsRef.current = tabs;
@@ -193,10 +512,20 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
     setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   }, []);
 
+  const revealInExplorer = useCallback((path: string) => {
+    try {
+      if (typeof window === 'undefined') return;
+      window.dispatchEvent(new CustomEvent('gopilot:revealInExplorer', { detail: { path } }));
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const openFile = useCallback(async (path: string) => {
     const existing = tabsRef.current.find((t) => t.path === path);
     if (existing) {
       setActiveId(existing.id);
+      revealInExplorer(path);
       return;
     }
 
@@ -276,6 +605,8 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
       setActiveId(id);
     }
 
+    revealInExplorer(path);
+
     try {
       const content = await readText(path);
       setTabs((prev) =>
@@ -291,6 +622,18 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
             : t,
         ),
       );
+
+      try {
+        await preloadImportsForFile({
+          filePath: path,
+          source: content,
+          language,
+          projectRoot: projectRootRef.current,
+          aliasRules: aliasRulesRef.current,
+        });
+      } catch {
+        // ignore
+      }
     } catch {
       const msg = `Failed to read file.\n${path}\n\nPossible causes:\n- Tauri FS scope/permissions do not allow this path\n- The file is binary or encoded in an unsupported format`;
       setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, value: msg, savedValue: msg, viewerId: 'binary', readOnly: true } : t)));
@@ -308,12 +651,14 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
         if (t) setActiveId(t.id);
       }
     },
-    [openFile],
+    [openFile, revealInExplorer],
   );
 
   const openFileAt = useCallback(
     async (path: string, line: number, column?: number) => {
       await openFile(path);
+
+      revealInExplorer(path);
 
       const wantedLine = Math.max(1, Number(line) || 1);
       const wantedCol = Math.max(1, Number(column ?? 1) || 1);

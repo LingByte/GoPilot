@@ -1,7 +1,7 @@
 import GlobalHeader from '@/components/layouts/GlobalHeader';
 import ActivityBar, { type ActivityBarItem } from '@/components/layouts/ActivityBar';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Files, Search, GitBranch } from 'lucide-react';
+import { Files, Search, GitBranch, Terminal } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ExplorerTree from '@/components/explorer/ExplorerTree';
 import EditorWorkspace, { type EditorWorkspaceHandle } from '@/components/editor/EditorWorkspace';
@@ -11,6 +11,8 @@ import GitPanel from '@/components/git/GitPanel';
 import SearchPanel from '@/components/search/SearchPanel';
 import GlobalFooter from '@/components/layouts/GlobalFooter';
 import BottomPanel from '@/components/terminal/BottomPanel';
+import RightSidebar from '@/components/layouts/RightSidebar';
+import RightActivityBar from '@/components/layouts/RightActivityBar';
 import { ExtensionRegistry } from './extensions/registry';
 import { loadBuiltinExtensions } from '@/extensions/builtin';
 import { loadInstalledExtensionContributions } from './extensions/installed';
@@ -137,6 +139,7 @@ function EditorShell() {
     const [bottomTab, setBottomTab] = useState<'problems' | 'output' | 'terminal'>('terminal');
     const [bottomHeight, setBottomHeight] = useState(260);
     const [outputText, setOutputText] = useState('');
+    const [rightActiveId, setRightActiveId] = useState<string | null>(null);
     const registryRef = useRef<ExtensionRegistry | null>(null);
     const [ext, setExt] = useState<ExtensionContributions>({ activityBarItems: [], sidebarPanels: [] });
 
@@ -172,6 +175,12 @@ function EditorShell() {
     const items: ActivityBarItem[] = useMemo(() => {
         return [...baseItems, ...ext.activityBarItems];
     }, [baseItems, ext.activityBarItems]);
+
+    const rightItems = useMemo(() => {
+        return [
+            { id: 'tools', label: 'Tools', icon: <Terminal className="w-5 h-5" /> },
+        ];
+    }, []);
 
     const appendOutput = useCallback(
         (title: string, text: string) => {
@@ -366,6 +375,26 @@ function EditorShell() {
     }, []);
 
     useEffect(() => {
+        const handler = () => {
+            setActiveId('explorer');
+        };
+
+        try {
+            window.addEventListener('gopilot:revealInExplorer', handler as any);
+        } catch {
+            return;
+        }
+
+        return () => {
+            try {
+                window.removeEventListener('gopilot:revealInExplorer', handler as any);
+            } catch {
+                return;
+            }
+        };
+    }, []);
+
+    useEffect(() => {
         if (rootPath) localStorage.setItem(EXPLORER_ROOT_KEY, rootPath);
         else localStorage.removeItem(EXPLORER_ROOT_KEY);
     }, [rootPath]);
@@ -470,6 +499,7 @@ function EditorShell() {
                                 onSessionChange={(session: WorkspaceSession) => persistSession(session)}
                                 recentProjects={recentProjects}
                                 onOpenRecentProject={(p: string) => void openRecentProject(p)}
+                                projectRoot={rootPath}
                             />
                         </div>
                         <BottomPanel
@@ -484,6 +514,51 @@ function EditorShell() {
                             onClearOutput={clearOutput}
                         />
                     </div>
+
+                    <RightSidebar
+                        open={rightActiveId === 'tools'}
+                        title="Tools"
+                        onClose={() => setRightActiveId(null)}
+                    >
+                        <div className="p-3 flex flex-col gap-2">
+                            <button
+                                type="button"
+                                className="text-sm px-3 py-2 rounded border border-gray-200 hover:bg-gray-50 active:bg-gray-100 text-left"
+                                onClick={() => {
+                                    setBottomTab('terminal');
+                                    setBottomOpen(true);
+                                }}
+                            >
+                                Open Terminal
+                            </button>
+                            <button
+                                type="button"
+                                className="text-sm px-3 py-2 rounded border border-gray-200 hover:bg-gray-50 active:bg-gray-100 text-left"
+                                onClick={() => {
+                                    setBottomTab('output');
+                                    setBottomOpen(true);
+                                }}
+                            >
+                                Open Output
+                            </button>
+                            <button
+                                type="button"
+                                className="text-sm px-3 py-2 rounded border border-gray-200 hover:bg-gray-50 active:bg-gray-100 text-left"
+                                onClick={clearOutput}
+                            >
+                                Clear Output
+                            </button>
+                            <button
+                                type="button"
+                                className="text-sm px-3 py-2 rounded border border-gray-200 hover:bg-gray-50 active:bg-gray-100 text-left"
+                                onClick={() => navigate('/settings')}
+                            >
+                                Settings
+                            </button>
+                        </div>
+                    </RightSidebar>
+
+                    <RightActivityBar items={rightItems} activeId={rightActiveId} onActiveChange={setRightActiveId} />
                 </div>
                 <GlobalFooter
                     rootPath={rootPath}

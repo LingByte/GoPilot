@@ -5,6 +5,8 @@ export type ActivityBarItem = {
   label: string;
   icon: ReactNode;
   disabled?: boolean;
+  active?: boolean;
+  onSelect?: () => void;
 };
 
 export type ActivityBarProps = {
@@ -56,8 +58,16 @@ export default function ActivityBar({
           <ItemButton
             key={item.id}
             item={item}
-            active={item.id === activeId}
-            onClick={() => onActiveChange(item.id)}
+            active={item.active ?? item.id === activeId}
+            onClick={
+              item.disabled
+                ? () => {
+                    return;
+                  }
+                : item.onSelect
+                  ? item.onSelect
+                  : () => onActiveChange(item.id)
+            }
           />
         ))}
       </div>
@@ -68,8 +78,16 @@ export default function ActivityBar({
             <ItemButton
               key={item.id}
               item={item}
-              active={item.id === activeId}
-              onClick={() => onActiveChange(item.id)}
+              active={item.active ?? item.id === activeId}
+              onClick={
+                item.disabled
+                  ? () => {
+                      return;
+                    }
+                  : item.onSelect
+                    ? item.onSelect
+                    : () => onActiveChange(item.id)
+              }
             />
           ))}
         </div>
