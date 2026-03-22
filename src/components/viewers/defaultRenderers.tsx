@@ -1,6 +1,7 @@
 import type { FileViewerRenderer, FileViewerRenderParams } from './types';
 import MonacoEditor from '@/components/editor/MonacoEditor';
 import VideoViewer from './VideoViewer';
+import MarkdownViewer from './MarkdownViewer';
 
 function ext(path: string) {
   const idx = path.lastIndexOf('.');
@@ -70,10 +71,8 @@ export const markdownRenderer: FileViewerRenderer = {
     const e = ext(path);
     return ['md', 'markdown'].includes(e);
   },
-  render: ({ tab }: FileViewerRenderParams) => (
-    <div className="p-4 h-full overflow-auto">
-      <pre className="whitespace-pre-wrap">{tab.value}</pre>
-    </div>
+  render: ({ tab, onChange }: FileViewerRenderParams) => (
+    <MarkdownViewer value={tab.value} onChange={onChange} readOnly={tab.readOnly} />
   ),
 };
 

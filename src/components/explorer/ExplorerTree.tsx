@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, File as FileIcon, FolderOpen } from 'lucide-react';
+import { ChevronDown, ChevronRight, File as FileIcon, FilePlus, FolderOpen } from 'lucide-react';
 
 type TreeNode = {
   path: string;
@@ -37,6 +37,14 @@ function joinPath(parent: string, child: string) {
   const p = parent.endsWith('\\') || parent.endsWith('/') ? parent.slice(0, -1) : parent;
   const c = child.startsWith('\\') || child.startsWith('/') ? child.slice(1) : child;
   return p + sep + c;
+}
+
+function dirname(p: string) {
+  const parts = p.split(/[/\\]/).filter(Boolean);
+  if (parts.length <= 1) return '';
+  const sep = p.includes('\\') ? '\\' : '/';
+  const prefix = /^[a-zA-Z]:/.test(p) ? parts[0] + sep : p.startsWith(sep) ? sep : '';
+  return prefix + parts.slice(1, -1).join(sep);
 }
 
 function normalizeEntryPath(parentPath: string, entryPath: string) {
@@ -94,6 +102,25 @@ export default function ExplorerTree({ onOpenFile, rootPath: controlledRootPath,
       setError('Open folder is only available in the Tauri desktop app.');
     }
   }, [setEffectiveRootPath]);
+
+  const openFile = useCallback(async () => {
+    setError('');
+    try {
+      const dialog = await import('@tauri-apps/api/dialog');
+      const selected = await dialog.open({ directory: false, multiple: false });
+      if (!selected) return;
+      const p = Array.isArray(selected) ? selected[0] : selected;
+
+      if (!effectiveRootPath && controlledRootPath === undefined) {
+        const parent = dirname(p);
+        if (parent) setEffectiveRootPath(parent);
+      }
+
+      onOpenFile?.(p);
+    } catch {
+      setError('Open file is only available in the Tauri desktop app.');
+    }
+  }, [controlledRootPath, effectiveRootPath, onOpenFile, setEffectiveRootPath]);
 
   useEffect(() => {
     if (controlledRootPath !== undefined) return;
@@ -264,15 +291,26 @@ export default function ExplorerTree({ onOpenFile, rootPath: controlledRootPath,
     <div className="h-full flex flex-col bg-white">
       <div className="h-10 px-3 flex items-center justify-between border-b border-gray-200">
         <div className="text-sm font-medium text-gray-800 truncate">{headerTitle}</div>
-        <button
-          type="button"
-          onClick={openFolder}
-          className="p-1.5 rounded-md hover:bg-gray-100 active:bg-gray-200"
-          aria-label="Open Folder"
-          title="Open Folder"
-        >
-          <FolderOpen className="w-4 h-4 text-gray-600" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={openFile}
+            className="p-1.5 rounded-md hover:bg-gray-100 active:bg-gray-200"
+            aria-label="Open File"
+            title="Open File"
+          >
+            <FilePlus className="w-4 h-4 text-gray-600" />
+          </button>
+          <button
+            type="button"
+            onClick={openFolder}
+            className="p-1.5 rounded-md hover:bg-gray-100 active:bg-gray-200"
+            aria-label="Open Folder"
+            title="Open Folder"
+          >
+            <FolderOpen className="w-4 h-4 text-gray-600" />
+          </button>
+        </div>
       </div>
 
       {error ? <div className="p-3 text-xs text-red-600">{error}</div> : null}

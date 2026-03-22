@@ -47,14 +47,42 @@ function getFileName(path: string) {
 
 function inferLanguage(path: string) {
   const lower = path.toLowerCase();
+  const base = lower.split(/[/\\]/).pop() ?? lower;
+  if (base === 'dockerfile' || base.endsWith('.dockerfile')) return 'dockerfile';
+  if (base === 'makefile') return 'makefile';
+
   if (lower.endsWith('.ts') || lower.endsWith('.tsx')) return 'typescript';
-  if (lower.endsWith('.js') || lower.endsWith('.jsx')) return 'javascript';
-  if (lower.endsWith('.go')) return 'go';
+  if (lower.endsWith('.js') || lower.endsWith('.jsx') || lower.endsWith('.mjs') || lower.endsWith('.cjs')) return 'javascript';
   if (lower.endsWith('.json')) return 'json';
   if (lower.endsWith('.css')) return 'css';
-  if (lower.endsWith('.html')) return 'html';
-  if (lower.endsWith('.md')) return 'markdown';
+  if (lower.endsWith('.scss')) return 'scss';
+  if (lower.endsWith('.less')) return 'less';
+  if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'html';
+  if (lower.endsWith('.xml')) return 'xml';
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'markdown';
   if (lower.endsWith('.yml') || lower.endsWith('.yaml')) return 'yaml';
+  if (lower.endsWith('.toml')) return 'toml';
+  if (lower.endsWith('.ini') || lower.endsWith('.cfg') || lower.endsWith('.conf')) return 'ini';
+
+  if (lower.endsWith('.go')) return 'go';
+  if (lower.endsWith('.rs')) return 'rust';
+  if (lower.endsWith('.java')) return 'java';
+  if (lower.endsWith('.kt') || lower.endsWith('.kts')) return 'kotlin';
+  if (lower.endsWith('.py')) return 'python';
+  if (lower.endsWith('.rb')) return 'ruby';
+  if (lower.endsWith('.php')) return 'php';
+  if (lower.endsWith('.cs')) return 'csharp';
+  if (lower.endsWith('.c')) return 'c';
+  if (lower.endsWith('.h')) return 'c';
+  if (lower.endsWith('.cpp') || lower.endsWith('.cc') || lower.endsWith('.cxx') || lower.endsWith('.hpp') || lower.endsWith('.hh') || lower.endsWith('.hxx')) return 'cpp';
+
+  if (lower.endsWith('.sh') || lower.endsWith('.bash') || lower.endsWith('.zsh') || lower.endsWith('.fish')) return 'shell';
+  if (lower.endsWith('.ps1') || lower.endsWith('.psm1') || lower.endsWith('.psd1')) return 'powershell';
+  if (lower.endsWith('.bat') || lower.endsWith('.cmd')) return 'bat';
+
+  if (lower.endsWith('.sql')) return 'sql';
+  if (lower.endsWith('.graphql') || lower.endsWith('.gql')) return 'graphql';
+  if (lower.endsWith('.dockerignore')) return 'plaintext';
   return 'plaintext';
 }
 
