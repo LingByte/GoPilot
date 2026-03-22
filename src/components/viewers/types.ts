@@ -5,7 +5,7 @@ export type FileViewerTabModel = {
   path: string;
   title: string;
   language: string;
-  viewerId: 'text' | 'markdown' | 'image' | 'audio' | 'pdf' | 'video' | 'binary';
+  viewerId: 'text' | 'markdown' | 'image' | 'audio' | 'pdf' | 'video' | 'binary' | 'tableData' | 'sqlConsole';
   readOnly: boolean;
   value: string;
   reveal?: {

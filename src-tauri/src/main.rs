@@ -18,8 +18,35 @@ use std::collections::HashMap;
 use chrono::DateTime;
 use tauri_plugin_single_instance;
 mod extension_host;
+mod db;
 
 use extension_host::{ExtensionHostState, start_extension_host, stop_extension_host, activate_extension, deactivate_extension, extension_host_execute_command};
+use db::{
+    DbRegistry,
+    db_add_connection,
+    db_add_connection_for_project,
+    db_update_connection,
+    db_update_connection_for_project,
+    db_rename_connection_for_project,
+    db_remove_connection,
+    db_remove_connection_for_project,
+    db_list_connections,
+    db_clear_connections,
+    db_list_databases,
+    db_list_schemas,
+    db_load_connections,
+    db_save_connections,
+    db_test_connection,
+    db_query_sql,
+    db_query_sql_paged,
+    db_list_tables,
+    db_list_columns,
+    db_mongo_list_databases,
+    db_mongo_list_collections,
+    db_mongo_run_command,
+    db_redis_cmd,
+    db_redis_info,
+};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use zip::ZipArchive;
@@ -1427,6 +1454,7 @@ fn main() {
         .manage(ProcessMap::default())
         .manage(TerminalSessionMap::default())
         .manage(Arc::new(Mutex::new(ExtensionHostState::default())))
+        .manage(DbRegistry::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             get_app_info,
@@ -1471,6 +1499,29 @@ fn main() {
             activate_extension,
             deactivate_extension,
             extension_host_execute_command,
+            db_add_connection,
+            db_add_connection_for_project,
+            db_update_connection,
+            db_update_connection_for_project,
+            db_rename_connection_for_project,
+            db_remove_connection,
+            db_remove_connection_for_project,
+            db_list_connections,
+            db_clear_connections,
+            db_list_databases,
+            db_list_schemas,
+            db_load_connections,
+            db_save_connections,
+            db_test_connection,
+            db_query_sql,
+            db_query_sql_paged,
+            db_list_tables,
+            db_list_columns,
+            db_mongo_list_databases,
+            db_mongo_list_collections,
+            db_mongo_run_command,
+            db_redis_cmd,
+            db_redis_info,
         ])
         .setup(move |app| {
             // 如果有启动参数（拖放的文件），发送事件到前端

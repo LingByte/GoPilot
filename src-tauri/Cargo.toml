@@ -28,6 +28,11 @@ zip = "0.6"
 tauri-plugin-single-instance = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v1" }
 portable-pty = "0.8"
 
+# Database drivers (connection testing / datasource registry)
+sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio-rustls", "mysql", "postgres", "sqlite"] }
+mongodb = { version = "2", default-features = false, features = ["tokio-runtime"] }
+redis = { version = "0.25", default-features = false, features = ["tokio-comp"] }
+
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem
 # DO NOT REMOVE!!

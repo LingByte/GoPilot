@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, useImperativeHandle } from 'react';
 import TabsBar, { type EditorTab } from '@/components/editor/TabsBar';
 import FileViewer from '@/components/viewers/FileViewer';
 import {
@@ -26,7 +26,7 @@ type TabState = {
   language: string;
   value: string;
   savedValue: string;
-  viewerId: 'text' | 'markdown' | 'image' | 'audio' | 'pdf' | 'video' | 'binary';
+  viewerId: 'text' | 'markdown' | 'image' | 'audio' | 'pdf' | 'video' | 'binary' | 'tableData' | 'sqlConsole';
   assetUrl?: string;
   readOnly: boolean;
   reveal?: {
@@ -38,6 +38,7 @@ type TabState = {
 export type EditorWorkspaceHandle = {
   openFile: (path: string) => Promise<void>;
   openFileAt: (path: string, line: number, column?: number) => Promise<void>;
+  openSqlConsole: (connectionId: string, title?: string) => Promise<void>;
   saveActive: () => Promise<void>;
   restoreSession: (openPaths: string[], activePath?: string) => Promise<void>;
 };
@@ -373,7 +374,7 @@ const EMPTY_PDF_EDIT_STATE = JSON.stringify({ version: 1, annotations: [] });
 
 const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(function EditorWorkspace(
   { onSessionChange, recentProjects, onOpenRecentProject, projectRoot }: EditorWorkspaceProps,
-  ref,
+  _ref,
 ) {
   const [tabs, setTabs] = useState<TabState[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -512,6 +513,32 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
     setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   }, []);
 
+  const openSqlConsole = useCallback(async (connectionId: string, title?: string) => {
+    if (!connectionId) return;
+    const path = `gopilot://sql-console/${connectionId}.sql`;
+    const existing = tabsRef.current.find((t) => t.path === path);
+    if (existing) {
+      setActiveId(existing.id);
+      return;
+    }
+
+    const id = `tab_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    setTabs((prev) => [
+      ...prev,
+      {
+        id,
+        path,
+        title: title && title.trim() ? `${title} (SQL)` : 'SQL Console',
+        language: 'sql',
+        value: 'SELECT 1;\n',
+        savedValue: 'SELECT 1;\n',
+        viewerId: 'sqlConsole',
+        readOnly: false,
+      },
+    ]);
+    setActiveId(id);
+  }, []);
+
   const revealInExplorer = useCallback((path: string) => {
     try {
       if (typeof window === 'undefined') return;
@@ -640,21 +667,20 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
     }
   }, []);
 
-  const restoreSession = useCallback(
+  const _restoreSession = useCallback(
     async (openPaths: string[], activePath?: string) => {
       const uniq = Array.from(new Set((openPaths ?? []).filter(Boolean)));
       for (const p of uniq) {
         await openFile(p);
       }
-      if (activePath) {
-        const t = tabsRef.current.find((x) => x.path === activePath);
-        if (t) setActiveId(t.id);
+      if (activePath && uniq.includes(activePath)) {
+        setActiveId(activePath);
       }
     },
-    [openFile, revealInExplorer],
+    [openFile, setActiveId],
   );
 
-  const openFileAt = useCallback(
+  const _openFileAt = useCallback(
     async (path: string, line: number, column?: number) => {
       await openFile(path);
 
@@ -732,7 +758,7 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
     })();
   }, [openFile]);
 
-  const saveActive = useCallback(async () => {
+  const _saveActive = useCallback(async () => {
     if (!activeTab) return;
     if (activeTab.value === activeTab.savedValue) return;
 
@@ -939,25 +965,78 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
     [tabs],
   );
 
-  useImperativeHandle(ref, () => ({ openFile, openFileAt, saveActive, restoreSession }), [openFile, openFileAt, saveActive, restoreSession]);
-
-  const keyHandlerRef = useRef<(e: KeyboardEvent) => void>();
   useEffect(() => {
-    keyHandlerRef.current = (e: KeyboardEvent) => {
-      const isMac = navigator.platform.toLowerCase().includes('mac');
-      const mod = isMac ? e.metaKey : e.ctrlKey;
-      if (mod && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        void saveActive();
+    const handler = (evt: Event) => {
+      const e = evt as CustomEvent<{ connectionId?: string; title?: string }>;
+      const connectionId = e?.detail?.connectionId ? String(e.detail.connectionId) : '';
+      const title = e?.detail?.title ? String(e.detail.title) : undefined;
+      if (!connectionId) return;
+      void openSqlConsole(connectionId, title);
+    };
+
+    const tableDataHandler = (evt: Event) => {
+      const e = evt as CustomEvent<{ connectionId?: string; database?: string; table?: string; title?: string }>;
+      const connectionId = e?.detail?.connectionId ? String(e.detail.connectionId) : '';
+      const database = e?.detail?.database ? String(e.detail.database) : '';
+      const table = e?.detail?.table ? String(e.detail.table) : '';
+      const title = e?.detail?.title ? String(e.detail.title) : undefined;
+      if (!connectionId || !database || !table) return;
+      
+      const path = `gopilot://table-data/${connectionId}/${database}/${table}.data`;
+      const tabId = `table-data-${connectionId}-${database}-${table}`;
+      const existingTab = tabs.find(t => t.id === tabId);
+      
+      if (existingTab) {
+        setActiveId(tabId);
+      } else {
+        // Create a new tab manually
+        const newTab: TabState = {
+          id: tabId,
+          path,
+          title: title || `${database}.${table}`,
+          language: 'text',
+          value: '',
+          savedValue: '',
+          viewerId: 'tableData',
+          readOnly: true,
+        };
+        setTabs(prev => [...prev, newTab]);
+        setActiveId(tabId);
       }
     };
-  }, [saveActive]);
+
+    try {
+      window.addEventListener('gopilot:openSqlConsole', handler as any);
+      window.addEventListener('gopilot:openTableData', tableDataHandler as any);
+    } catch {
+      return;
+    }
+
+    return () => {
+      try {
+        window.removeEventListener('gopilot:openSqlConsole', handler as any);
+        window.removeEventListener('gopilot:openTableData', tableDataHandler as any);
+      } catch {
+        // ignore
+      }
+    };
+  }, [openSqlConsole, tabs, setTabs, setActiveId]);
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => keyHandlerRef.current?.(e);
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    // Keyboard shortcuts can be added here later if needed
+    return () => {
+      // cleanup
+    };
   }, []);
+
+  // 暴露方法给父组件
+  useImperativeHandle(_ref, () => ({
+    openFile,
+    openFileAt: _openFileAt,
+    openSqlConsole,
+    saveActive: _saveActive,
+    restoreSession: _restoreSession,
+  }), [openFile, _openFileAt, openSqlConsole, _saveActive, _restoreSession]);
 
   return (
     <div className="h-full flex flex-col bg-gray-50">

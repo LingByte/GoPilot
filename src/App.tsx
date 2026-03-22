@@ -1,7 +1,7 @@
 import GlobalHeader from '@/components/layouts/GlobalHeader';
 import ActivityBar, { type ActivityBarItem } from '@/components/layouts/ActivityBar';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Files, Search, GitBranch, Terminal } from 'lucide-react';
+import { Files, Search, GitBranch, Terminal, Database } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ExplorerTree from '@/components/explorer/ExplorerTree';
 import EditorWorkspace, { type EditorWorkspaceHandle } from '@/components/editor/EditorWorkspace';
@@ -11,8 +11,8 @@ import GitPanel from '@/components/git/GitPanel';
 import SearchPanel from '@/components/search/SearchPanel';
 import GlobalFooter from '@/components/layouts/GlobalFooter';
 import BottomPanel from '@/components/terminal/BottomPanel';
-import RightSidebar from '@/components/layouts/RightSidebar';
-import RightActivityBar from '@/components/layouts/RightActivityBar';
+import ResizableRightPanel from '@/components/layouts/ResizableRightPanel';
+import DatabasePanel from '@/components/database/DatabasePanel';
 import { ExtensionRegistry } from './extensions/registry';
 import { loadBuiltinExtensions } from '@/extensions/builtin';
 import { loadInstalledExtensionContributions } from './extensions/installed';
@@ -179,6 +179,7 @@ function EditorShell() {
     const rightItems = useMemo(() => {
         return [
             { id: 'tools', label: 'Tools', icon: <Terminal className="w-5 h-5" /> },
+            { id: 'database', label: 'Database', icon: <Database className="w-5 h-5" /> },
         ];
     }, []);
 
@@ -515,50 +516,65 @@ function EditorShell() {
                         />
                     </div>
 
-                    <RightSidebar
-                        open={rightActiveId === 'tools'}
-                        title="Tools"
-                        onClose={() => setRightActiveId(null)}
-                    >
-                        <div className="p-3 flex flex-col gap-2">
-                            <button
-                                type="button"
-                                className="text-sm px-3 py-2 rounded border border-gray-200 hover:bg-gray-50 active:bg-gray-100 text-left"
-                                onClick={() => {
-                                    setBottomTab('terminal');
-                                    setBottomOpen(true);
-                                }}
-                            >
-                                Open Terminal
-                            </button>
-                            <button
-                                type="button"
-                                className="text-sm px-3 py-2 rounded border border-gray-200 hover:bg-gray-50 active:bg-gray-100 text-left"
-                                onClick={() => {
-                                    setBottomTab('output');
-                                    setBottomOpen(true);
-                                }}
-                            >
-                                Open Output
-                            </button>
-                            <button
-                                type="button"
-                                className="text-sm px-3 py-2 rounded border border-gray-200 hover:bg-gray-50 active:bg-gray-100 text-left"
-                                onClick={clearOutput}
-                            >
-                                Clear Output
-                            </button>
-                            <button
-                                type="button"
-                                className="text-sm px-3 py-2 rounded border border-gray-200 hover:bg-gray-50 active:bg-gray-100 text-left"
-                                onClick={() => navigate('/settings')}
-                            >
-                                Settings
-                            </button>
-                        </div>
-                    </RightSidebar>
-
-                    <RightActivityBar items={rightItems} activeId={rightActiveId} onActiveChange={setRightActiveId} />
+                    {/* 弹性右侧面板 */}
+                    <ResizableRightPanel
+                        items={rightItems}
+                        panels={[
+                            {
+                                id: 'tools',
+                                title: 'Tools',
+                                children: (
+                                    <div className="p-3 flex flex-col gap-2">
+                                        <button
+                                            type="button"
+                                            className="text-sm px-3 py-2 rounded border border-gray-200 hover:bg-gray-50 active:bg-gray-100 text-left"
+                                            onClick={() => {
+                                                setBottomTab('terminal');
+                                                setBottomOpen(true);
+                                            }}
+                                        >
+                                            Open Terminal
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="text-sm px-3 py-2 rounded border border-gray-200 hover:bg-gray-50 active:bg-gray-100 text-left"
+                                            onClick={() => {
+                                                setBottomTab('output');
+                                                setBottomOpen(true);
+                                            }}
+                                        >
+                                            Open Output
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="text-sm px-3 py-2 rounded border border-gray-200 hover:bg-gray-50 active:bg-gray-100 text-left"
+                                            onClick={clearOutput}
+                                        >
+                                            Clear Output
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="text-sm px-3 py-2 rounded border border-gray-200 hover:bg-gray-50 active:bg-gray-100 text-left"
+                                            onClick={() => navigate('/settings')}
+                                        >
+                                            Settings
+                                        </button>
+                                    </div>
+                                ),
+                                minWidth: 200,
+                                defaultWidth: 280,
+                            },
+                            {
+                                id: 'database',
+                                title: 'Database',
+                                children: <DatabasePanel rootPath={rootPath} />,
+                                minWidth: 300,
+                                defaultWidth: 480,
+                            },
+                        ]}
+                        activeId={rightActiveId}
+                        onActiveChange={setRightActiveId}
+                    />
                 </div>
                 <GlobalFooter
                     rootPath={rootPath}
