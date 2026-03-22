@@ -1,6 +1,6 @@
 import GlobalHeader from '@/components/layouts/GlobalHeader';
 import ActivityBar, { type ActivityBarItem } from '@/components/layouts/ActivityBar';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Files, Search, GitBranch } from 'lucide-react';
 import { Route, Routes, useNavigate } from 'react-router-dom';
 import ExplorerTree from '@/components/explorer/ExplorerTree';
@@ -18,8 +18,80 @@ import { activateInstalledExtensionsNode } from './extensions/node-runtime';
 import { listenForOutputEvents } from './extensions/output-listener';
 import type { ExtensionContributions } from './extensions/types';
 import Settings from './pages/Settings';
+import { fs } from '@tauri-apps/api';
+import { invoke } from '@tauri-apps/api/tauri';
 
 const EXPLORER_ROOT_KEY = 'gopilot.explorer.rootPath';
+
+function pilotOutputLogPath(rootPath: string) {
+    return `${rootPath}\\.pilot\\output.jsonl`;
+}
+
+// 创建 .pilot 索引文件
+async function createPilotIndexFile(rootPath: string) {
+    console.log('Creating .pilot file for:', rootPath);
+    try {
+        // 保持原始的 Windows 路径格式
+        const pilotDirPath = `${rootPath}\\.pilot`;
+        const pilotIndexPath = `${pilotDirPath}\\index.json`;
+
+        console.log('Original path:', rootPath);
+        console.log('Pilot dir path:', pilotDirPath);
+        console.log('Pilot index path:', pilotIndexPath);
+
+        // 创建或更新索引文件内容
+        const pilotContent = JSON.stringify({
+            version: '1.0.0',
+            created: new Date().toISOString(),
+            lastUpdated: new Date().toISOString(),
+            rootPath,
+            files: [],
+            lastIndexed: null,
+        }, null, 2);
+        
+        console.log('File content length:', pilotContent.length);
+
+        // 直接使用 Tauri 命令
+        console.log('Using Tauri commands directly...');
+
+        // 如果之前错误地创建了同名文件，则先删除
+        try {
+            await invoke('delete_file', { path: pilotDirPath });
+            console.log('Deleted legacy .pilot file (if it existed)');
+        } catch {
+            // ignore
+        }
+
+        // 确保 .pilot 目录存在
+        await invoke('create_directory', { path: pilotDirPath });
+
+        // 写入索引文件
+        await invoke('write_file', { path: pilotIndexPath, content: pilotContent });
+        console.log('Tauri commands executed successfully');
+
+        // 验证 index.json 是否真的被创建
+        try {
+            const verifyContent = await fs.readTextFile(pilotIndexPath);
+            console.log('File verification successful, size:', verifyContent.length);
+            console.log('File content preview:', verifyContent.substring(0, 100) + '...');
+        } catch (verifyError) {
+            console.error('File verification failed:', verifyError);
+
+            // 尝试使用 Tauri 命令读取验证
+            try {
+                const tauriContent = (await invoke('read_file', { path: pilotIndexPath })) as string;
+                console.log('Tauri file verification successful, size:', tauriContent.length);
+                console.log('Tauri file content preview:', tauriContent.substring(0, 100) + '...');
+            } catch (tauriVerifyError) {
+                console.error('Tauri file verification also failed:', tauriVerifyError);
+            }
+        }
+
+        console.log('Successfully updated .pilot index file at:', pilotIndexPath);
+    } catch (error) {
+        console.error('Failed to create .pilot file:', error);
+    }
+}
 
 function App() {
     return (
@@ -80,17 +152,72 @@ function EditorShell() {
         return [...baseItems, ...ext.activityBarItems];
     }, [baseItems, ext.activityBarItems]);
 
-    const appendOutput = (title: string, text: string) => {
-        const stamp = new Date().toLocaleTimeString();
-        const header = `[${stamp}] ${title}`;
-        const body = (text ?? '').toString().trimEnd();
-        setOutputText((prev) => {
-            const next = prev ? `${prev}\n\n${header}\n${body}` : `${header}\n${body}`;
-            return next.trimEnd();
-        });
-        setBottomTab('output');
-        setBottomOpen(true);
-    };
+    const appendOutput = useCallback(
+        (title: string, text: string) => {
+            if (!rootPath) return;
+            const entry = {
+                ts: new Date().toISOString(),
+                title,
+                text: (text ?? '').toString(),
+            };
+            const line = `${JSON.stringify(entry)}\n`;
+
+            setOutputText((prev) => (prev ? `${prev}${line}` : line));
+
+            void (async () => {
+                try {
+                    const p = pilotOutputLogPath(rootPath);
+                    await invoke('create_directory', { path: `${rootPath}\\.pilot` });
+                    await invoke('append_file', { path: p, content: line });
+                } catch (e) {
+                    console.error('Failed to append output log:', e);
+                }
+            })();
+
+            setBottomTab('output');
+            setBottomOpen(true);
+        },
+        [rootPath],
+    );
+
+    const loadOutputLog = useCallback(async () => {
+        if (!rootPath) {
+            setOutputText('');
+            return;
+        }
+        try {
+            const p = pilotOutputLogPath(rootPath);
+            const content = await invoke('read_file', { path: p });
+            setOutputText(typeof content === 'string' ? content : String(content ?? ''));
+        } catch {
+            setOutputText('');
+        }
+    }, [rootPath]);
+
+    const clearOutput = useCallback(() => {
+        setOutputText('');
+        if (!rootPath) return;
+        void (async () => {
+            try {
+                const p = pilotOutputLogPath(rootPath);
+                await invoke('write_file', { path: p, content: '' });
+            } catch (e) {
+                console.error('Failed to clear output log:', e);
+            }
+        })();
+    }, [rootPath]);
+
+    // 创建 .pilot 索引文件的包装函数
+    const handleRootPathChange = useCallback(
+        async (path: string) => {
+            console.log('Root path changing to:', path);
+            setRootPath(path);
+            console.log('About to create .pilot file...');
+            await createPilotIndexFile(path);
+            await loadOutputLog();
+        },
+        [loadOutputLog],
+    );
 
     useEffect(() => {
         const onExtOutput = (e: any) => {
@@ -113,24 +240,35 @@ function EditorShell() {
 
     useEffect(() => {
         let unlisten: null | (() => void) = null;
+        console.log('Setting up file open listeners...');
 
         (async () => {
             try {
+                console.log('Importing Tauri event module...');
                 const event = await import('@tauri-apps/api/event');
                 const fs = await import('@tauri-apps/api/fs');
+                console.log('Tauri modules imported successfully');
+                
                 const listener = await event.listen<string[]>('open-files', async (e) => {
+                    console.log('open-files event received:', e.payload);
                     const paths = (e.payload ?? []).filter(Boolean);
                     if (paths.length === 0) return;
 
                     const candidate = paths[0];
                     try {
                         await fs.readDir(candidate, { recursive: false });
+                        console.log('Setting root path to:', candidate);
                         setRootPath(candidate);
+                        console.log('About to create .pilot file...');
+                        await createPilotIndexFile(candidate); // 创建 .pilot 文件
+                        await loadOutputLog();
                         setActiveId('explorer');
-                    } catch {
+                    } catch (error) {
+                        console.error('Failed to open directory:', error);
                         return;
                     }
                 });
+                console.log('open-files listener set up successfully');
                 unlisten = () => {
                     try {
                         listener();
@@ -138,8 +276,8 @@ function EditorShell() {
                         return;
                     }
                 };
-            } catch {
-                return;
+            } catch (error) {
+                console.error('Failed to set up file listeners:', error);
             }
         })();
 
@@ -152,6 +290,10 @@ function EditorShell() {
         if (rootPath) localStorage.setItem(EXPLORER_ROOT_KEY, rootPath);
         else localStorage.removeItem(EXPLORER_ROOT_KEY);
     }, [rootPath]);
+
+    useEffect(() => {
+        void loadOutputLog();
+    }, [loadOutputLog]);
 
     useEffect(() => {
         let unlisten: null | (() => void) = null;
@@ -167,9 +309,14 @@ function EditorShell() {
                     const candidate = paths[0];
                     try {
                         await fs.readDir(candidate, { recursive: false });
+                        console.log('Setting root path to:', candidate);
                         setRootPath(candidate);
+                        console.log('About to create .pilot file...');
+                        await createPilotIndexFile(candidate); // 创建 .pilot 文件
+                        await loadOutputLog();
                         setActiveId('explorer');
-                    } catch {
+                    } catch (error) {
+                        console.error('Failed to open directory:', error);
                         return;
                     }
                 });
@@ -200,7 +347,7 @@ function EditorShell() {
                     <div className={"w-64 min-w-64 border-r border-gray-200 " + (activeId === 'explorer' ? '' : 'hidden')}>
                         <ExplorerTree
                             rootPath={rootPath}
-                            onRootPathChange={setRootPath}
+                            onRootPathChange={handleRootPathChange}
                             onOpenFile={(path) => workspaceRef.current?.openFile(path)}
                         />
                     </div>
@@ -245,7 +392,7 @@ function EditorShell() {
                             onHeightChange={setBottomHeight}
                             rootPath={rootPath}
                             outputText={outputText}
-                            onClearOutput={() => setOutputText('')}
+                            onClearOutput={clearOutput}
                         />
                     </div>
                 </div>

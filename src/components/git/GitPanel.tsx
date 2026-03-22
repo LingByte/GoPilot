@@ -286,30 +286,33 @@ export default function GitPanel({
   );
 
   const pull = useCallback(async () => {
+    onOutput?.('git pull', 'START');
     try {
       let out = '';
       await runAction(async (invoke) => {
         out = (await invoke<string>('git_pull', { path: rootPath })) ?? '';
       });
-      onOutput?.('git pull', out);
+      onOutput?.('git pull', out || 'DONE');
     } catch (e: any) {
       const msg = typeof e === 'string' ? e : e?.message ? String(e.message) : 'Git pull failed.';
-      onOutput?.('git pull', msg);
+      onOutput?.('git pull', `ERROR: ${msg}`);
     }
   }, [onOutput, rootPath, runAction]);
 
   const push = useCallback(async () => {
+    onOutput?.('git push', 'START');
     try {
       let out = '';
       await runAction(async (invoke) => {
         out = (await invoke<string>('git_push', { path: rootPath })) ?? '';
       });
-      onOutput?.('git push', out);
+      onOutput?.('git push', out || 'DONE');
     } catch (e: any) {
       const msg = typeof e === 'string' ? e : e?.message ? String(e.message) : 'Git push failed.';
-      onOutput?.('git push', msg);
+      onOutput?.('git push', `ERROR: ${msg}`);
     }
   }, [onOutput, rootPath, runAction]);
+
   const commitAll = useCallback(async () => {
     const msg = commitMessage.trim();
     if (!msg) return;

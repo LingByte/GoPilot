@@ -350,6 +350,19 @@ async fn write_file(path: String, content: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn append_file(path: String, content: String) -> Result<(), String> {
+    use std::fs::OpenOptions;
+
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    f.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn read_directory(path: String) -> Result<Vec<FileEntry>, String> {
     let dir_path = Path::new(&path);
     
@@ -1422,6 +1435,7 @@ fn main() {
             read_file,
             read_binary_file,
             write_file,
+            append_file,
             read_directory,
             read_directory_tree,
             create_file,

@@ -8,9 +8,15 @@ import { initTheme } from '@/theme/theme'
 // 静默处理 xterm.js RenderService 错误
 const originalError = console.error;
 console.error = (...args) => {
-  const message = args[0];
-  if (typeof message === 'string' && message.includes('Cannot read properties of undefined (reading \'dimensions\')')) {
-    // 静默忽略 RenderService 错误
+  const message = String(args[0] || '');
+  const errorString = message + ' ' + args.slice(1).map(String).join(' ');
+  
+  if (errorString.includes('Cannot read properties of undefined (reading \'dimensions\')') ||
+      errorString.includes('get dimensions') ||
+      errorString.includes('RenderService') ||
+      errorString.includes('Viewport._innerRefresh') ||
+      errorString.includes('t2.Viewport._innerRefresh')) {
+    // 静默忽略 RenderService 相关错误
     return;
   }
   originalError.apply(console, args);
@@ -18,7 +24,25 @@ console.error = (...args) => {
 
 // 静默处理全局错误事件
 window.addEventListener('error', (event) => {
-  if (event.message && event.message.includes('Cannot read properties of undefined (reading \'dimensions\')')) {
+  const errorString = String(event.message || '');
+  if (errorString.includes('Cannot read properties of undefined (reading \'dimensions\')') ||
+      errorString.includes('get dimensions') ||
+      errorString.includes('RenderService') ||
+      errorString.includes('Viewport._innerRefresh') ||
+      errorString.includes('t2.Viewport._innerRefresh')) {
+    event.preventDefault();
+    return false;
+  }
+});
+
+// 静默处理未捕获的 Promise 错误
+window.addEventListener('unhandledrejection', (event) => {
+  const errorString = String(event.reason?.message || event.reason || '');
+  if (errorString.includes('Cannot read properties of undefined (reading \'dimensions\')') ||
+      errorString.includes('get dimensions') ||
+      errorString.includes('RenderService') ||
+      errorString.includes('Viewport._innerRefresh') ||
+      errorString.includes('t2.Viewport._innerRefresh')) {
     event.preventDefault();
     return false;
   }
