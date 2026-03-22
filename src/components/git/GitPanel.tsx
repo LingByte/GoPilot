@@ -45,6 +45,8 @@ export default function GitPanel({
   const [remoteMenuOpen, setRemoteMenuOpen] = useState(false);
   const [graphExpanded, setGraphExpanded] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
+  const [commitAiBusy, setCommitAiBusy] = useState(false);
+  const [commitAiError, setCommitAiError] = useState('');
   const [aheadBy, setAheadBy] = useState(0);
   const [behindBy, setBehindBy] = useState(0);
 
@@ -327,6 +329,104 @@ export default function GitPanel({
     });
     setCommitMessage('');
   }, [commitMessage, runAction, rootPath]);
+
+  const generateCommitMessageWithAi = useCallback(async () => {
+    if (!rootPath) return;
+    if (commitAiBusy) return;
+
+    setCommitAiBusy(true);
+    setCommitAiError('');
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+
+      const stagedLocal = statusItems.filter((s) => s.isStaged);
+      const unstagedLocal = statusItems.filter((s) => !s.isStaged);
+
+      const changedPaths = [...unstagedLocal.map((s) => s.path), ...stagedLocal.map((s) => s.path)].filter(Boolean);
+      const uniquePaths = Array.from(new Set(changedPaths));
+      if (uniquePaths.length === 0) {
+        setCommitAiError('没有检测到改动文件');
+        return;
+      }
+
+      const MAX_FILES = 20;
+      const MAX_CHARS = 12000;
+      let buf = '';
+      let usedFiles = 0;
+      let truncated = false;
+
+      for (const file of uniquePaths.slice(0, MAX_FILES)) {
+        let diff: any = null;
+        try {
+          diff = await invoke<any>('git_diff', { path: rootPath, file });
+        } catch {
+          diff = null;
+        }
+
+        const additions = diff?.additions ?? '';
+        const deletions = diff?.deletions ?? '';
+        const hunks = Array.isArray(diff?.hunks) ? diff.hunks : [];
+        let diffText = '';
+        for (const h of hunks) {
+          const lines = Array.isArray(h?.lines) ? h.lines : [];
+          for (const ln of lines) {
+            const t = String(ln?.type || 'context');
+            const content = String(ln?.content ?? '');
+            const prefix = t === 'added' ? '+' : t === 'deleted' ? '-' : ' ';
+            diffText += prefix + content + '\n';
+            if (diffText.length > 2000) {
+              diffText += '...(diff truncated)\n';
+              break;
+            }
+          }
+          if (diffText.includes('...(diff truncated)')) break;
+        }
+
+        const chunk = `### ${file}\n+${additions} -${deletions}\n\n${diffText}\n`;
+        if (buf.length + chunk.length > MAX_CHARS) {
+          truncated = true;
+          break;
+        }
+        buf += chunk;
+        usedFiles++;
+      }
+
+      if (uniquePaths.length > usedFiles) truncated = true;
+
+      const aiConfig = await invoke<any>('ai_get_config');
+      const model = typeof aiConfig?.model === 'string' && aiConfig.model.trim() ? aiConfig.model : 'gpt-3.5-turbo';
+
+      const system = `你是 GoPilot 的 Git 助手。请根据 diff 总结生成一条符合 Conventional Commits 规范的 commit message。\n\n要求：\n- 只输出 commit message 文本，不要任何解释\n- 优先使用 feat/fix/refactor/docs/chore/test 等类型\n- 简短清晰，必要时可以换行写 body\n- 如果改动很多，请概括核心点`;
+      const user = `项目路径：${rootPath}\n\n改动文件数：${uniquePaths.length}${truncated ? '（已截断/压缩）' : ''}\n\nDiff：\n${buf}`;
+
+      const resp = await invoke<any>('ai_chat', {
+        request: {
+          model,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+          ],
+          temperature: 0.2,
+          max_tokens: 200,
+          stream: false,
+        },
+      });
+
+      const text =
+        resp?.choices?.[0]?.message?.content != null ? String(resp.choices[0].message.content) : '';
+      const next = text.trim();
+      if (!next) {
+        setCommitAiError('AI 未返回 commit message');
+        return;
+      }
+      setCommitMessage(next);
+    } catch (e: any) {
+      const msg = typeof e === 'string' ? e : e?.message ? String(e.message) : 'AI 生成失败';
+      setCommitAiError(msg);
+    } finally {
+      setCommitAiBusy(false);
+    }
+  }, [commitAiBusy, rootPath, statusItems]);
 
   useEffect(() => {
     void refresh();
@@ -634,14 +734,15 @@ export default function GitPanel({
           <div className="p-3 border-t border-gray-200">
             <div className="text-xs font-medium text-gray-700 mb-2">Commit</div>
             <div className="space-y-2">
+              <textarea
+                value={commitMessage}
+                onChange={(e) => setCommitMessage(e.target.value)}
+                placeholder="message..."
+                className="w-full text-xs px-2 py-1 border border-gray-200 rounded resize-y min-h-[64px] max-h-40"
+                disabled={actionBusy || commitAiBusy}
+              />
+
               <div className="flex items-center gap-2">
-                <input
-                  value={commitMessage}
-                  onChange={(e) => setCommitMessage(e.target.value)}
-                  placeholder="message..."
-                  className="flex-1 text-xs px-2 py-1 border border-gray-200 rounded"
-                  disabled={actionBusy}
-                />
                 <button
                   type="button"
                   className="text-xs px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
@@ -651,7 +752,18 @@ export default function GitPanel({
                 >
                   Commit
                 </button>
+                <button
+                  type="button"
+                  className="text-xs px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
+                  onClick={() => void generateCommitMessageWithAi()}
+                  disabled={actionBusy || commitAiBusy || (!unstaged.length && !staged.length)}
+                  title="AI 生成 commit message"
+                >
+                  {commitAiBusy ? 'AI...' : 'AI'}
+                </button>
               </div>
+
+              {commitAiError ? <div className="text-[11px] text-red-600 whitespace-pre-wrap">{commitAiError}</div> : null}
 
               <div className="flex items-center gap-2">
                 <button
