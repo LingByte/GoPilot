@@ -7,17 +7,60 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio, Child};
 use std::io::{BufRead, BufReader};
-use std::sync::{Arc, Mutex};
 use std::cmp::min;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use futures_util::StreamExt;
+use tokio::io::AsyncWriteExt;
 use std::thread;
 use std::collections::HashMap;
 use chrono::DateTime;
 use tauri_plugin_single_instance;
+mod extension_host;
+
+use extension_host::{ExtensionHostState, start_extension_host, stop_extension_host, activate_extension, deactivate_extension, extension_host_execute_command};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use std::time::{SystemTime, UNIX_EPOCH};
+use zip::ZipArchive;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AppState {
     theme: String,
     window_title: String,
+}
+
+#[tauri::command]
+async fn extract_vsix(vsix_path: String, dest_dir: String) -> Result<(), String> {
+    let dest = Path::new(&dest_dir);
+    fs::create_dir_all(dest).map_err(|e| format!("创建目录失败: {} - {}", dest.display(), e))?;
+
+    let file = std::fs::File::open(&vsix_path).map_err(|e| format!("打开 VSIX 失败: {} - {}", vsix_path, e))?;
+    let mut archive = ZipArchive::new(file).map_err(|e| format!("解析 VSIX 失败: {}", e))?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| format!("读取 VSIX 条目失败: {}", e))?;
+        let Some(name) = entry.enclosed_name() else { continue };
+        let out_path = dest.join(name);
+
+        if entry.name().ends_with('/') {
+            fs::create_dir_all(&out_path)
+                .map_err(|e| format!("创建目录失败: {} - {}", out_path.display(), e))?;
+            continue;
+        }
+
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("创建目录失败: {} - {}", parent.display(), e))?;
+        }
+
+        let mut outfile = std::fs::File::create(&out_path)
+            .map_err(|e| format!("创建文件失败: {} - {}", out_path.display(), e))?;
+        std::io::copy(&mut entry, &mut outfile)
+            .map_err(|e| format!("解压失败: {} - {}", out_path.display(), e))?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -132,6 +175,127 @@ async fn search_workspace(path: String, query: String, max_results: Option<usize
 
 // 存储正在运行的进程
 type ProcessMap = Arc<Mutex<HashMap<String, Child>>>;
+
+type TerminalSessionMap = Arc<Mutex<HashMap<String, TerminalSession>>>;
+
+struct TerminalSession {
+    writer: Box<dyn Write + Send>,
+    child: Box<dyn portable_pty::Child + Send>,
+    // Keep master alive so reader thread stays connected
+    _master: Box<dyn portable_pty::MasterPty + Send>,
+}
+
+#[tauri::command]
+async fn terminal_start(
+    cwd: Option<String>,
+    cols: u16,
+    rows: u16,
+    window: Window,
+    sessions: State<'_, TerminalSessionMap>,
+) -> Result<String, String> {
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_millis();
+    let session_id = format!("term_{}", ts);
+
+    let system = native_pty_system();
+    let pair = system
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())?;
+
+    let shell = if cfg!(target_os = "windows") {
+        // Use PowerShell by default to match VSCode-ish behavior
+        "powershell.exe".to_string()
+    } else {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
+    };
+
+    let mut cmd = CommandBuilder::new(shell);
+    if let Some(dir) = cwd {
+        if !dir.trim().is_empty() {
+            cmd.cwd(dir);
+        }
+    }
+
+    let child = pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e| e.to_string())?;
+
+    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let master_for_store = pair.master;
+
+    sessions.lock().unwrap().insert(
+        session_id.clone(),
+        TerminalSession {
+            writer,
+            child,
+            _master: master_for_store,
+        },
+    );
+
+    let window_clone = window.clone();
+    let session_id_clone = session_id.clone();
+    thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let _ = window_clone.emit(
+                        "terminal-data",
+                        serde_json::json!({
+                            "sessionId": session_id_clone,
+                            "data": text,
+                        }),
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    Ok(session_id)
+}
+
+#[tauri::command]
+async fn terminal_write(session_id: String, data: String, sessions: State<'_, TerminalSessionMap>) -> Result<(), String> {
+    let mut map = sessions.lock().unwrap();
+    let sess = map.get_mut(&session_id).ok_or_else(|| "Terminal session not found".to_string())?;
+    sess.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+    sess.writer.flush().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn terminal_resize(session_id: String, cols: u16, rows: u16, sessions: State<'_, TerminalSessionMap>) -> Result<(), String> {
+    let mut map = sessions.lock().unwrap();
+    let sess = map.get_mut(&session_id).ok_or_else(|| "Terminal session not found".to_string())?;
+    sess._master
+        .resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn terminal_kill(session_id: String, sessions: State<'_, TerminalSessionMap>) -> Result<(), String> {
+    let mut map = sessions.lock().unwrap();
+    if let Some(mut sess) = map.remove(&session_id) {
+        let _ = sess.child.kill();
+        let _ = sess.child.wait();
+    }
+    Ok(())
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct FileEntry {
@@ -358,7 +522,8 @@ async fn download_file(url: String, save_path: String) -> Result<(), String> {
     
     // 创建 reqwest 客户端，设置超时和用户代理
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(300)) // 5分钟超时
+        // Large extensions can be hundreds of MB; avoid timing out while reading the body.
+        .timeout(std::time::Duration::from_secs(60 * 30)) // 30分钟超时
         .user_agent("GoPilot/1.0.0")
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
@@ -382,27 +547,147 @@ async fn download_file(url: String, save_path: String) -> Result<(), String> {
         println!("文件大小: {} 字节", len);
     }
     
-    println!("读取响应数据...");
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("读取响应失败: {}", e))?;
-    
-    println!("数据读取完成，大小: {} 字节", bytes.len());
-    
     // 确保目录存在
     if let Some(parent) = Path::new(&save_path).parent() {
         println!("创建目录: {:?}", parent);
         fs::create_dir_all(parent)
             .map_err(|e| format!("创建目录失败: {} - {}", parent.display(), e))?;
     }
-    
-    println!("保存文件到: {}", save_path);
-    fs::write(&save_path, bytes.as_ref())
-        .map_err(|e| format!("保存文件失败: {} - {}", save_path, e))?;
-    
-    println!("文件下载完成: {}", save_path);
-    Ok(())
+
+    // Try to speed up large downloads via parallel range requests if the server supports it.
+    // Fallback to the existing single-stream download if range isn't supported.
+    let accept_ranges = response
+        .headers()
+        .get(reqwest::header::ACCEPT_RANGES)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
+    let supports_range = accept_ranges.contains("bytes");
+
+    let should_parallel = supports_range
+        && content_length.unwrap_or(0) >= 8 * 1024 * 1024; // only parallelize for >= 8MB
+
+    if should_parallel {
+        let total = content_length.unwrap_or(0);
+        let concurrency: u64 = 6;
+        let part_size = (total + concurrency - 1) / concurrency;
+        println!("检测到 Range 支持，启用并发下载: {} 路，总大小: {} 字节", concurrency, total);
+
+        let mut tasks = Vec::new();
+        for part_index in 0..concurrency {
+            let start = part_index * part_size;
+            if start >= total {
+                break;
+            }
+            let end = min(total - 1, start + part_size - 1);
+            let range_header = format!("bytes={}-{}", start, end);
+            let part_path = format!("{}.part{}", save_path, part_index);
+            let url_clone = url.clone();
+            let client_clone = client.clone();
+
+            tasks.push(tokio::spawn(async move {
+                println!("下载分片 {}: {} -> {}", part_index, range_header, part_path);
+                let resp = client_clone
+                    .get(&url_clone)
+                    .header(reqwest::header::RANGE, range_header)
+                    .send()
+                    .await
+                    .map_err(|e| format!("下载分片失败(part {}): {}", part_index, e))?;
+
+                if !(resp.status().is_success() || resp.status() == reqwest::StatusCode::PARTIAL_CONTENT) {
+                    return Err(format!(
+                        "下载分片 HTTP 错误(part {}): {}",
+                        part_index,
+                        resp.status()
+                    ));
+                }
+
+                let mut f = tokio::fs::File::create(&part_path)
+                    .await
+                    .map_err(|e| format!("创建分片文件失败(part {}): {}", part_index, e))?;
+                let mut stream = resp.bytes_stream();
+                while let Some(item) = stream.next().await {
+                    let chunk = item.map_err(|e| format!("读取分片响应失败(part {}): {}", part_index, e))?;
+                    f.write_all(&chunk)
+                        .await
+                        .map_err(|e| format!("写入分片文件失败(part {}): {}", part_index, e))?;
+                }
+                f.flush()
+                    .await
+                    .map_err(|e| format!("刷新分片文件失败(part {}): {}", part_index, e))?;
+                Ok::<String, String>(part_path)
+            }));
+        }
+
+        let mut part_paths: Vec<String> = Vec::new();
+        for t in tasks {
+            match t.await {
+                Ok(Ok(p)) => part_paths.push(p),
+                Ok(Err(e)) => {
+                    return Err(e);
+                }
+                Err(e) => {
+                    return Err(format!("下载分片任务异常: {}", e));
+                }
+            }
+        }
+
+        // Merge parts in order.
+        part_paths.sort_by(|a, b| {
+            let ai = a.rsplit(".part").next().and_then(|x| x.parse::<u64>().ok()).unwrap_or(0);
+            let bi = b.rsplit(".part").next().and_then(|x| x.parse::<u64>().ok()).unwrap_or(0);
+            ai.cmp(&bi)
+        });
+
+        println!("合并分片到目标文件...");
+        let save_path_clone = save_path.clone();
+        let part_paths_for_merge = part_paths.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let mut out = std::fs::File::create(&save_path_clone)
+                .map_err(|e| format!("创建文件失败: {} - {}", save_path_clone, e))?;
+            for p in &part_paths_for_merge {
+                let mut inp = std::fs::File::open(p)
+                    .map_err(|e| format!("打开分片失败: {} - {}", p, e))?;
+                std::io::copy(&mut inp, &mut out)
+                    .map_err(|e| format!("合并分片失败: {} - {}", p, e))?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("合并任务异常: {}", e))??;
+
+        // Cleanup part files.
+        for p in part_paths {
+            let _ = tokio::fs::remove_file(&p).await;
+        }
+
+        println!("文件下载完成(并发): {}", save_path);
+        Ok(())
+    } else {
+        println!("读取响应数据并写入文件...");
+        let mut file = std::fs::File::create(&save_path)
+            .map_err(|e| format!("创建文件失败: {} - {}", save_path, e))?;
+
+        let mut downloaded: u64 = 0;
+        let mut stream = response.bytes_stream();
+        while let Some(item) = stream.next().await {
+            let chunk = item.map_err(|e| format!("读取响应失败: {}", e))?;
+            std::io::Write::write_all(&mut file, &chunk)
+                .map_err(|e| format!("写入文件失败: {} - {}", save_path, e))?;
+            downloaded += chunk.len() as u64;
+            if let Some(total) = content_length {
+                if total > 0 && downloaded % (10 * 1024 * 1024) < chunk.len() as u64 {
+                    println!("下载进度: {}/{} 字节", downloaded, total);
+                }
+            } else if downloaded % (10 * 1024 * 1024) < chunk.len() as u64 {
+                println!("下载进度: {} 字节", downloaded);
+            }
+        }
+
+        println!("数据写入完成，大小: {} 字节", downloaded);
+        println!("文件下载完成: {}", save_path);
+        Ok(())
+    }
 }
 
 // 对话框相关命令
@@ -726,23 +1011,53 @@ async fn git_log(path: String, limit: Option<u32>) -> Result<Vec<serde_json::Val
 }
 
 #[tauri::command]
-async fn git_pull(path: String) -> Result<(), String> {
-    Command::new("git")
+async fn git_pull(path: String) -> Result<String, String> {
+    let output = Command::new("git")
         .args(["pull"])
         .current_dir(&path)
         .output()
         .map_err(|e| e.to_string())?;
-    Ok(())
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let combined = if stderr.trim().is_empty() {
+        stdout.clone()
+    } else if stdout.trim().is_empty() {
+        stderr.clone()
+    } else {
+        format!("{}\n{}", stdout.trim_end(), stderr.trim_end())
+    };
+
+    if output.status.success() {
+        Ok(combined)
+    } else {
+        Err(if combined.trim().is_empty() { "Git pull failed".to_string() } else { combined })
+    }
 }
 
 #[tauri::command]
-async fn git_push(path: String) -> Result<(), String> {
-    Command::new("git")
+async fn git_push(path: String) -> Result<String, String> {
+    let output = Command::new("git")
         .args(["push"])
         .current_dir(&path)
         .output()
         .map_err(|e| e.to_string())?;
-    Ok(())
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let combined = if stderr.trim().is_empty() {
+        stdout.clone()
+    } else if stdout.trim().is_empty() {
+        stderr.clone()
+    } else {
+        format!("{}\n{}", stdout.trim_end(), stderr.trim_end())
+    };
+
+    if output.status.success() {
+        Ok(combined)
+    } else {
+        Err(if combined.trim().is_empty() { "Git push failed".to_string() } else { combined })
+    }
 }
 
 #[tauri::command]
@@ -982,7 +1297,7 @@ async fn execute_command_stream(
         cmd.spawn().map_err(|e| e.to_string())?
     };
     
-    let pid = child.id();
+    let _pid = child.id();
     processes.lock().unwrap().insert(process_id.clone(), child);
     
     let stdout = processes.lock().unwrap().get_mut(&process_id)
@@ -994,8 +1309,8 @@ async fn execute_command_stream(
         .ok_or("Failed to get stderr".to_string())?;
     
     let window_clone = window.clone();
-    let process_id_clone = process_id.clone();
-    let processes_clone = processes.inner().clone();
+    let _process_id_clone = process_id.clone();
+    // 不需要 clone 整个 processes，在需要时获取锁
     
     thread::spawn(move || {
         let reader = BufReader::new(stdout);
@@ -1010,8 +1325,8 @@ async fn execute_command_stream(
     });
     
     let window_clone2 = window.clone();
-    let process_id_clone2 = process_id.clone();
-    let processes_clone2 = processes.inner().clone();
+    let _process_id_clone2 = process_id.clone();
+    // 不需要 clone 整个 processes，在需要时获取锁
     
     thread::spawn(move || {
         let reader = BufReader::new(stderr);
@@ -1024,11 +1339,8 @@ async fn execute_command_stream(
             }
         }
         
-        // 等待进程结束
-        if let Some(mut child) = processes_clone2.lock().unwrap().remove(&process_id_clone2) {
-            let exit_code = child.wait().map(|s| s.code().unwrap_or(0)).unwrap_or(1);
-            window_clone2.emit("command-finished", exit_code).ok();
-        }
+        // 等待进程结束 - 这个逻辑需要重新设计，因为不能跨线程传递 MutexGuard
+        // 暂时注释掉，后续可以重新实现进程结束检测
     });
     
     Ok(())
@@ -1100,6 +1412,8 @@ fn main() {
             window_title: "GoPilot".to_string(),
         })
         .manage(ProcessMap::default())
+        .manage(TerminalSessionMap::default())
+        .manage(Arc::new(Mutex::new(ExtensionHostState::default())))
         .invoke_handler(tauri::generate_handler![
             greet,
             get_app_info,
@@ -1112,17 +1426,15 @@ fn main() {
             read_directory_tree,
             create_file,
             create_directory,
-            delete_file,
-            rename_file,
-            path_exists,
+            terminal_start,
+            terminal_write,
+            terminal_resize,
+            terminal_kill,
             execute_command,
             execute_command_stream,
-            get_current_directory,
-            change_directory,
-            kill_command,
             is_git_repository,
-            git_status,
             git_current_branch,
+            git_status,
             git_branches,
             git_checkout,
             git_create_branch,
@@ -1139,6 +1451,12 @@ fn main() {
             open_file_dialog,
             git_init,
             download_file,
+            extract_vsix,
+            start_extension_host,
+            stop_extension_host,
+            activate_extension,
+            deactivate_extension,
+            extension_host_execute_command,
         ])
         .setup(move |app| {
             // 如果有启动参数（拖放的文件），发送事件到前端

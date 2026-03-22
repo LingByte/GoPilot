@@ -18,12 +18,15 @@ tauri = { workspace = true, features = ["api-all", "cli", "macos-private-api"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-reqwest = { workspace = true }
 base64 = "0.21"
 libc = "0.2"
 chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.11", features = ["json", "stream"] }
+futures-util = "0.3"
 regex = "1.10"
+zip = "0.6"
 tauri-plugin-single-instance = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v1" }
+portable-pty = "0.8"
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem

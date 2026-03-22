@@ -1,8 +1,5 @@
+import type { FileViewerRenderer, FileViewerRenderParams } from './types';
 import MonacoEditor from '@/components/editor/MonacoEditor';
-import type { FileViewerRenderer } from './types';
-import ImageViewer from './ImageViewer';
-import MarkdownViewer from './MarkdownViewer';
-import PdfEditorViewer from './PdfEditorViewer';
 import VideoViewer from './VideoViewer';
 
 function ext(path: string) {
@@ -15,22 +12,22 @@ export function isImagePath(path: string) {
   return ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'icns'].includes(e);
 }
 
-export function isAudioPath(path: string) {
-  const e = ext(path);
-  return ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac'].includes(e);
-}
-
-export function isPdfPath(path: string) {
-  return ext(path) === 'pdf';
-}
-
 export function isVideoPath(path: string) {
   const e = ext(path);
   return ['mp4', 'webm'].includes(e);
 }
 
+export function isAudioPath(path: string) {
+  const e = ext(path);
+  return ['mp3', 'wav', 'ogg', 'flac', 'aac'].includes(e);
+}
+
 export function isMarkdownPath(path: string) {
   return ext(path) === 'md' || ext(path) === 'markdown';
+}
+
+export function isPdfPath(path: string) {
+  return ext(path) === 'pdf';
 }
 
 export function imageMime(path: string) {
@@ -56,21 +53,54 @@ export function videoMime(path: string) {
   return 'application/octet-stream';
 }
 
+export function audioMime(path: string) {
+  const e = ext(path);
+  if (e === 'mp3') return 'audio/mpeg';
+  if (e === 'wav') return 'audio/wav';
+  if (e === 'ogg') return 'audio/ogg';
+  if (e === 'flac') return 'audio/flac';
+  if (e === 'aac') return 'audio/aac';
+  return 'application/octet-stream';
+}
+
 export const markdownRenderer: FileViewerRenderer = {
   id: 'markdown',
   label: 'Markdown',
-  match: (path) => isMarkdownPath(path),
-  render: ({ tab, onChange }) => (
-    <MarkdownViewer value={tab.value} onChange={onChange} readOnly={tab.readOnly} />
+  match: (path: string) => {
+    const e = ext(path);
+    return ['md', 'markdown'].includes(e);
+  },
+  render: ({ tab }: FileViewerRenderParams) => (
+    <div className="p-4 h-full overflow-auto">
+      <pre className="whitespace-pre-wrap">{tab.value}</pre>
+    </div>
   ),
 };
 
 export const pdfRenderer: FileViewerRenderer = {
   id: 'pdf',
   label: 'PDF',
-  match: (path) => isPdfPath(path),
-  render: ({ tab, assetUrl, onChange }) => (
-    <PdfEditorViewer assetUrl={assetUrl} value={tab.value} onChange={onChange} readOnly={tab.readOnly} />
+  match: (path: string) => {
+    const e = ext(path);
+    return e === 'pdf';
+  },
+  render: ({ tab }: FileViewerRenderParams) => (
+    <div className="p-4 h-full overflow-auto">
+      <div className="text-center text-gray-500">
+        PDF Viewer: {tab.path}
+      </div>
+    </div>
+  ),
+};
+
+export const imageRenderer: FileViewerRenderer = {
+  id: 'image',
+  label: 'Image',
+  match: (path: string) => isImagePath(path),
+  render: ({ assetUrl }: FileViewerRenderParams) => (
+    <div className="flex items-center justify-center h-full">
+      <img src={assetUrl} alt="Image" className="max-w-full max-h-full object-contain" />
+    </div>
   ),
 };
 
@@ -81,52 +111,33 @@ export const videoRenderer: FileViewerRenderer = {
   render: ({ assetUrl }) => <VideoViewer assetUrl={assetUrl} />,
 };
 
-export function audioMime(path: string) {
-  const e = ext(path);
-  if (e === 'mp3') return 'audio/mpeg';
-  if (e === 'wav') return 'audio/wav';
-  if (e === 'ogg') return 'audio/ogg';
-  if (e === 'm4a') return 'audio/mp4';
-  if (e === 'flac') return 'audio/flac';
-  if (e === 'aac') return 'audio/aac';
-  return 'application/octet-stream';
-}
+export const audioRenderer: FileViewerRenderer = {
+  id: 'audio',
+  label: 'Audio',
+  match: (path: string) => {
+    const e = ext(path);
+    return ['mp3', 'wav', 'ogg', 'flac', 'aac'].includes(e);
+  },
+  render: ({ assetUrl }: FileViewerRenderParams) => (
+    <div className="flex items-center justify-center h-full">
+      <audio controls src={assetUrl} className="max-w-full" />
+    </div>
+  ),
+};
 
 export const textRenderer: FileViewerRenderer = {
   id: 'text',
   label: 'Text',
   match: () => true,
-  render: ({ tab, onChange }) => (
+  render: ({ tab, onChange }: FileViewerRenderParams) => (
     <MonacoEditor
       value={tab.value}
       onChange={onChange}
       language={tab.language}
       height="100%"
       readOnly={tab.readOnly}
-      reveal={tab.reveal}
+      reveal={tab.reveal ? { line: tab.reveal.line, column: tab.reveal.column || 1 } : undefined}
     />
-  ),
-};
-
-export const imageRenderer: FileViewerRenderer = {
-  id: 'image',
-  label: 'Image',
-  match: (path) => isImagePath(path),
-  render: ({ tab, assetUrl }) => (
-    <div className="h-full w-full flex items-center justify-center bg-gray-50">
-      <ImageViewer src={assetUrl} alt={tab.title} />
-    </div>
-  ),
-};
-
-export const audioRenderer: FileViewerRenderer = {
-  id: 'audio',
-  label: 'Audio',
-  match: (path) => isAudioPath(path),
-  render: ({ assetUrl }) => (
-    <div className="h-full w-full flex items-center justify-center bg-gray-50 p-6">
-      {assetUrl ? <audio controls src={assetUrl} className="w-full" /> : <div className="text-sm text-gray-500">No preview</div>}
-    </div>
   ),
 };
 
@@ -134,9 +145,13 @@ export const binaryRenderer: FileViewerRenderer = {
   id: 'binary',
   label: 'Binary',
   match: () => true,
-  render: ({ tab }) => (
-    <div className="h-full w-full flex items-center justify-center bg-gray-50 p-6">
-      <pre className="text-xs text-gray-600 whitespace-pre-wrap">{tab.value}</pre>
+  render: ({ tab }: FileViewerRenderParams) => (
+    <div className="flex items-center justify-center h-full">
+      <div className="text-center">
+        <div className="text-6xl mb-4">📁</div>
+        <div className="text-lg font-medium mb-2">{tab.title}</div>
+        <div className="text-sm text-gray-500">Binary file - cannot preview</div>
+      </div>
     </div>
   ),
 };

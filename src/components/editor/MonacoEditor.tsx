@@ -1,12 +1,14 @@
 import { forwardRef, useEffect, useMemo, useRef, useImperativeHandle } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 
+// 直接导入 worker 以确保本地加载
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
 import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
 import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
 import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
 
+// 确保 Monaco Environment 在组件加载前设置
 declare global {
   interface Window {
     MonacoEnvironment?: {
@@ -15,9 +17,12 @@ declare global {
   }
 }
 
+// 立即设置 Monaco Environment
 if (!window.MonacoEnvironment) {
+  console.log('Setting up Monaco Environment with local workers');
   window.MonacoEnvironment = {
     getWorker(_moduleId: string, label: string) {
+      console.log('Creating worker for:', label);
       switch (label) {
         case 'json':
           return new jsonWorker();
@@ -37,6 +42,8 @@ if (!window.MonacoEnvironment) {
       }
     },
   };
+} else {
+  console.log('MonacoEnvironment already exists');
 }
 
 export type MonacoEditorProps = {
@@ -50,6 +57,15 @@ export type MonacoEditorProps = {
     column?: number;
   };
 };
+
+export interface MonacoEditorRef {
+  editor: any;
+  monaco: any;
+  focus: () => void;
+  revealPosition: (line: number, column?: number) => void;
+  getSelection: () => any;
+  setSelection: (selection: any) => void;
+}
 
 export type MonacoAnchor = {
   id: string;
@@ -100,18 +116,36 @@ const MonacoEditor = forwardRef<MonacoEditorHandle, MonacoEditorProps>(function 
       scrollBeyondLastLine: false,
       wordWrap: 'on' as const,
       readOnly,
-      automaticLayout: true,
+      automaticLayout: true, // 启用自动布局以适应容器
+      smoothScrolling: false,
+      cursorSmoothCaretAnimation: 'off' as const,
+      selectOnLineNumbers: true,
+      lineNumbers: 'on' as const,
+      renderLineHighlight: 'line' as const,
+      scrollbar: {
+        vertical: 'visible' as const,
+        horizontal: 'visible' as const,
+        useShadows: false,
+      },
     }),
     [readOnly],
   );
 
   const handleMount: OnMount = (editor, monaco) => {
+    console.log('Monaco Editor mounted successfully');
     editorRef.current = editor;
     monacoRef.current = monaco;
+
+    // 设置语言
     const model = editor.getModel();
     if (model) {
       monaco.editor.setModelLanguage(model, normalizedLanguage);
+      console.log('Monaco Editor language set to:', normalizedLanguage);
     }
+
+    // 设置主题
+    monaco.editor.setTheme('vs-dark');
+
     editor.focus();
   };
 

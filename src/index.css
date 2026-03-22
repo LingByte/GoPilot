@@ -5,6 +5,12 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 修复可能的默认 padding */
+body {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
 /* Modern Professional UI Base Styles */
 @layer base {
   * {

@@ -23,7 +23,13 @@ type GitGraphLine = {
   refs: string;
 };
 
-export default function GitPanel({ rootPath }: { rootPath: string }) {
+export default function GitPanel({
+  rootPath,
+  onOutput,
+}: {
+  rootPath: string;
+  onOutput?: (title: string, text: string) => void;
+}) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [isRepo, setIsRepo] = useState(false);
@@ -52,6 +58,29 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
   const [diffError, setDiffError] = useState('');
   const [diffFile, setDiffFile] = useState('');
   const [diffData, setDiffData] = useState<any>(null);
+
+  const openDiff = useCallback(
+    async (file: string) => {
+      if (!rootPath || !file) return;
+      setDiffOpen(true);
+      setDiffFile(file);
+      setDiffLoading(true);
+      setDiffError('');
+      setDiffData(null);
+
+      try {
+        const { invoke } = await import('@tauri-apps/api/tauri');
+        const res = await invoke<any>('git_diff', { path: rootPath, file });
+        setDiffData(res);
+      } catch (e: any) {
+        const msg = typeof e === 'string' ? e : e?.message ? String(e.message) : 'Failed to load diff.';
+        setDiffError(msg);
+      } finally {
+        setDiffLoading(false);
+      }
+    },
+    [rootPath],
+  );
 
   const refresh = useCallback(async () => {
     if (!rootPath) {
@@ -232,31 +261,6 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
     setCreateRemoteName('');
     setCreateRemoteLocalName('');
   }, [createRemoteLocalName, createRemoteName, runAction, rootPath]);
-
-  const openDiff = useCallback(
-    async (file: string) => {
-      if (!rootPath) return;
-      setDiffFile(file);
-      setDiffOpen(true);
-      setDiffLoading(true);
-      setDiffError('');
-      setDiffData(null);
-
-      try {
-        const { invoke } = await import('@tauri-apps/api/tauri');
-        const res = await invoke<any>('git_diff', { path: rootPath, file });
-        setDiffData(res);
-      } catch (e: any) {
-        const msg = typeof e === 'string' ? e : e?.message ? String(e.message) : 'Failed to load diff.';
-        setDiffError(msg);
-      } finally {
-        setDiffLoading(false);
-      }
-    },
-    [rootPath],
-  );
-
-
   const stagePaths = useCallback(
     async (paths: string[]) => {
       if (paths.length === 0) return;
@@ -282,17 +286,30 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
   );
 
   const pull = useCallback(async () => {
-    await runAction(async (invoke) => {
-      await invoke('git_pull', { path: rootPath });
-    });
-  }, [runAction, rootPath]);
+    try {
+      let out = '';
+      await runAction(async (invoke) => {
+        out = (await invoke<string>('git_pull', { path: rootPath })) ?? '';
+      });
+      onOutput?.('git pull', out);
+    } catch (e: any) {
+      const msg = typeof e === 'string' ? e : e?.message ? String(e.message) : 'Git pull failed.';
+      onOutput?.('git pull', msg);
+    }
+  }, [onOutput, rootPath, runAction]);
 
   const push = useCallback(async () => {
-    await runAction(async (invoke) => {
-      await invoke('git_push', { path: rootPath });
-    });
-  }, [runAction, rootPath]);
-
+    try {
+      let out = '';
+      await runAction(async (invoke) => {
+        out = (await invoke<string>('git_push', { path: rootPath })) ?? '';
+      });
+      onOutput?.('git push', out);
+    } catch (e: any) {
+      const msg = typeof e === 'string' ? e : e?.message ? String(e.message) : 'Git push failed.';
+      onOutput?.('git push', msg);
+    }
+  }, [onOutput, rootPath, runAction]);
   const commitAll = useCallback(async () => {
     const msg = commitMessage.trim();
     if (!msg) return;
@@ -713,11 +730,10 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
                       {unstaged.map((s) => {
                         const checked = !!selectedPaths[s.path];
                         return (
-                          <button
+                          <div
                             key={`unstaged:${s.path}`}
-                            type="button"
                             className={
-                              'w-full flex items-center gap-2 px-2 py-1 rounded text-left ' +
+                              'w-full flex items-center gap-2 px-2 py-1 rounded text-left cursor-pointer ' +
                               (checked ? 'bg-gray-100' : 'hover:bg-gray-50 active:bg-gray-100')
                             }
                             onClick={() =>
@@ -744,7 +760,7 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
                             >
                               Diff
                             </button>
-                          </button>
+                          </div>
                         );
                       })}
                     </div>
@@ -760,11 +776,10 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
                       {staged.map((s) => {
                         const checked = !!selectedStagedPaths[s.path];
                         return (
-                          <button
+                          <div
                             key={`staged:${s.path}`}
-                            type="button"
                             className={
-                              'w-full flex items-center gap-2 px-2 py-1 rounded text-left ' +
+                              'w-full flex items-center gap-2 px-2 py-1 rounded text-left cursor-pointer ' +
                               (checked ? 'bg-gray-100' : 'hover:bg-gray-50 active:bg-gray-100')
                             }
                             onClick={() =>
@@ -791,7 +806,7 @@ export default function GitPanel({ rootPath }: { rootPath: string }) {
                             >
                               Diff
                             </button>
-                          </button>
+                          </div>
                         );
                       })}
                     </div>

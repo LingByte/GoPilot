@@ -52,6 +52,9 @@ export default defineConfig({
       'framer-motion',
       'react-router-dom',
       'zustand',
+      '@monaco-editor/react',
+      'monaco-editor',
     ],
+    exclude: ['@monaco-editor/react/esm/vs/editor/editor.worker'],
   },
 })

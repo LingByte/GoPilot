@@ -82,6 +82,7 @@ export default function GlobalHeader({ onSettingsClick }: GlobalHeaderProps) {
           onClick={onSettingsClick}
           className="p-2 rounded-md hover:bg-gray-100 active:bg-gray-200"
           aria-label="Settings"
+          data-tauri-drag-region="false"
         >
           <Settings className="w-5 h-5" />
         </button>

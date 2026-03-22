@@ -242,15 +242,15 @@
 
 /* 深色主题下的按钮样式优化 */
 .dark .bg-blue-600 {
-  background-color: #3b82f6 !important;
+  background-color: hsl(var(--primary)) !important;
 }
 
 .dark .bg-blue-700 {
-  background-color: #2563eb !important;
+  background-color: hsl(var(--primary) / 0.9) !important;
 }
 
 .dark .hover\:bg-blue-700:hover {
-  background-color: #2563eb !important;
+  background-color: hsl(var(--primary) / 0.9) !important;
 }
 
 /* 深色主题下的输入框样式优化 */
@@ -268,8 +268,8 @@
 .dark input:focus,
 .dark textarea:focus,
 .dark select:focus {
-  border-color: #3b82f6 !important;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+  border-color: hsl(var(--primary)) !important;
+  box-shadow: 0 0 0 3px hsl(var(--primary) / 0.15) !important;
 }
 
 /* 确保Header和Layout使用正确的颜色 */
@@ -303,11 +303,11 @@
 
 /* 深色主题下的按钮样式 */
 .dark .bg-blue-600 {
-  background-color: #3b82f6 !important;
+  background-color: hsl(var(--primary)) !important;
 }
 
 .dark .bg-blue-700 {
-  background-color: #2563eb !important;
+  background-color: hsl(var(--primary) / 0.9) !important;
 }
 
 .dark .text-white {
@@ -404,13 +404,13 @@
 
 /* 深色主题下的选择文本 */
 .dark ::selection {
-  background-color: rgba(59, 130, 246, 0.3);
+  background-color: hsl(var(--primary) / 0.3);
   color: var(--color-text-primary);
 }
 
 /* 深色主题下的焦点样式 */
 .dark *:focus {
-  outline-color: #3b82f6 !important;
+  outline-color: hsl(var(--primary)) !important;
 }
 
 /* 深色主题下的链接样式 */
