@@ -396,8 +396,12 @@ export default function GitPanel({
       const aiConfig = await invoke<any>('ai_get_config');
       const model = typeof aiConfig?.model === 'string' && aiConfig.model.trim() ? aiConfig.model : 'gpt-3.5-turbo';
 
-      const system = `你是 GoPilot 的 Git 助手。请根据 diff 总结生成一条符合 Conventional Commits 规范的 commit message。\n\n要求：\n- 只输出 commit message 文本，不要任何解释\n- 优先使用 feat/fix/refactor/docs/chore/test 等类型\n- 简短清晰，必要时可以换行写 body\n- 如果改动很多，请概括核心点`;
-      const user = `项目路径：${rootPath}\n\n改动文件数：${uniquePaths.length}${truncated ? '（已截断/压缩）' : ''}\n\nDiff：\n${buf}`;
+      const stagedList = stagedLocal.map((s) => `${s.status}\t${s.path}`).join('\n');
+      const unstagedList = unstagedLocal.map((s) => `${s.status}\t${s.path}`).join('\n');
+
+      const system = `你是 GoPilot 的 Git commit message 生成助手。请根据提供的改动信息生成一个高质量、信息全面、符合 Conventional Commits 的 commit message。\n\n输出格式要求（严格）：\n- 只输出 commit message 纯文本，不要解释、不要 markdown、不要代码块\n- 第一行必须是：<type>(<scope>): <subject>\n  - type 必须从：feat, fix, refactor, perf, docs, test, chore, build, ci, style, revert 里选\n  - scope 可选（建议从模块/目录名归纳，如 git, ai, editor, explorer 等），没有就省略括号\n  - subject 使用英文小写开头（除专有名词），尽量 <= 72 字符\n- 如有必要，可以追加 body（空一行后），用条目列出关键改动点（每条以 - 开头）\n- 如有 BREAKING CHANGE：在 footer（空一行后）写 BREAKING CHANGE: ...，并在 type 后加 !（如 feat!: ...）\n\n内容要求：\n- 必须覆盖最重要的用户可感知变化与关键技术改动\n- 如果改动包含 bug 修复，要明确修复点\n- 如果改动只是格式/依赖/构建/工具链，也要选对 type（例如 chore/build/ci/style）\n- 如果信息不足，做最合理的概括，但不要编造不存在的功能`;
+
+      const user = `项目路径：${rootPath}\n当前分支：${currentBranch || '(unknown)'}\n\n改动文件总数：${uniquePaths.length}${truncated ? '（diff 已截断/压缩）' : ''}\n\nStaged files（将被提交）:\n${stagedList || '(none)'}\n\nUnstaged files（未暂存，但可能也相关）:\n${unstagedList || '(none)'}\n\nDiff（摘要/截断，按文件分组）：\n${buf}`;
 
       const resp = await invoke<any>('ai_chat', {
         request: {
@@ -406,8 +410,8 @@ export default function GitPanel({
             { role: 'system', content: system },
             { role: 'user', content: user },
           ],
-          temperature: 0.2,
-          max_tokens: 200,
+          temperature: 0.3,
+          max_tokens: 320,
           stream: false,
         },
       });

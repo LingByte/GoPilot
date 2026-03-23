@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Bot, Sparkles, Code, FileText, CheckCircle, AlertTriangle, Settings, Plus, Clock, ArrowLeft, X } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/tauri';
 import ReactMarkdown from 'react-markdown';
@@ -6,6 +6,67 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github.css';
 import { ConversationProvider, useConversation } from '../../contexts/ConversationContext';
+
+type FileRef = {
+  path: string;
+  displayPath: string;
+};
+
+type AiEditItem = {
+  path: string;
+  newText: string;
+};
+
+type AiEditPayload = {
+  edits: AiEditItem[];
+};
+
+function isAbsolutePath(p: string) {
+  return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('\\\\') || p.startsWith('/');
+}
+
+function joinPath(parent: string, child: string) {
+  if (!parent) return child;
+  const sep = parent.includes('\\') ? '\\' : '/';
+  const p = parent.endsWith('\\') || parent.endsWith('/') ? parent.slice(0, -1) : parent;
+  const c = child.startsWith('\\') || child.startsWith('/') ? child.slice(1) : child;
+  return p + sep + c;
+}
+
+function extractFirstJsonObject(raw: string): string {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+
+  // Prefer a ```json ...``` code fence if present
+  const jsonFenceMatch = s.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (jsonFenceMatch?.[1]) {
+    return jsonFenceMatch[1].trim();
+  }
+
+  const first = s.indexOf('{');
+  const last = s.lastIndexOf('}');
+  if (first >= 0 && last > first) {
+    return s.slice(first, last + 1).trim();
+  }
+  return '';
+}
+
+function tryParseEditsFromAssistant(content: string): AiEditPayload | null {
+  const candidate = extractFirstJsonObject(content);
+  if (!candidate) return null;
+  try {
+    const parsed = JSON.parse(candidate) as any;
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!Array.isArray(parsed.edits)) return null;
+    const edits: AiEditItem[] = parsed.edits
+      .filter((e: any) => e && typeof e.path === 'string' && typeof e.newText === 'string')
+      .map((e: any) => ({ path: String(e.path), newText: String(e.newText) }));
+    if (edits.length === 0) return null;
+    return { edits };
+  } catch {
+    return null;
+  }
+}
 
 interface Message {
   id: string;
@@ -15,13 +76,21 @@ interface Message {
 }
 
 // AI 面板内部组件（使用会话上下文）
-const AIPanelInner: React.FC = () => {
+const AIPanelInner: React.FC<{ rootPath?: string }> = ({ rootPath }) => {
   const [activeTab, setActiveTab] = useState<'chat' | 'decompose'>('chat');
   const [showHistory, setShowHistory] = useState(false);
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
+
+  const [fileRefs, setFileRefs] = useState<FileRef[]>([]);
+  const [filePickerOpen, setFilePickerOpen] = useState(false);
+  const [filePickerQuery, setFilePickerQuery] = useState('');
+  const [filePickerItems, setFilePickerItems] = useState<FileRef[]>([]);
+  const [filePickerBusy, setFilePickerBusy] = useState(false);
+
+  const [appliedByMsgId, setAppliedByMsgId] = useState<Record<string, Record<string, boolean>>>({});
 
   const { 
     createConversation,
@@ -33,6 +102,15 @@ const AIPanelInner: React.FC = () => {
     deleteConversation,
     isLoading: isConversationLoading
   } = useConversation();
+
+  const TypingIndicator = () => (
+    <div className="flex items-center gap-1" aria-label="AI typing">
+      <style>{`@keyframes aiDotPulse {0%{transform:translateY(0);opacity:.45} 30%{transform:translateY(-3px);opacity:1} 60%{transform:translateY(0);opacity:.45} 100%{transform:translateY(0);opacity:.45}}`}</style>
+      <div className="w-2 h-2 bg-gray-400 rounded-full" style={{ animation: 'aiDotPulse 1s infinite' }} />
+      <div className="w-2 h-2 bg-gray-400 rounded-full" style={{ animation: 'aiDotPulse 1s infinite', animationDelay: '0.12s' }} />
+      <div className="w-2 h-2 bg-gray-400 rounded-full" style={{ animation: 'aiDotPulse 1s infinite', animationDelay: '0.24s' }} />
+    </div>
+  );
 
   // 检查 AI 配置
   const checkAIConfig = async () => {
@@ -84,6 +162,128 @@ const AIPanelInner: React.FC = () => {
     }
   };
 
+  const canReferenceFiles = Boolean(rootPath && rootPath.trim());
+
+  const filteredPickerItems = useMemo(() => {
+    const q = filePickerQuery.trim().toLowerCase();
+    if (!q) return filePickerItems;
+    return filePickerItems.filter((it) => it.displayPath.toLowerCase().includes(q));
+  }, [filePickerItems, filePickerQuery]);
+
+  const loadProjectFiles = async () => {
+    if (!rootPath) return;
+    setFilePickerBusy(true);
+    try {
+      const entries = await invoke<any[]>('read_directory_tree', { path: rootPath, maxDepth: 8 });
+      const out: FileRef[] = [];
+      const excludedDirNames = new Set([
+        'node_modules',
+        'target',
+        'dist',
+        'build',
+        '.git',
+        '.next',
+        '.turbo',
+        '.cache',
+        '.idea',
+        '.vscode',
+      ]);
+      const walk = (nodes: any[]) => {
+        for (const n of nodes ?? []) {
+          const p = typeof n?.path === 'string' ? n.path : '';
+          const t = typeof n?.type === 'string' ? n.type : (typeof n?.entry_type === 'string' ? n.entry_type : '');
+          const isDir = t === 'directory' || Array.isArray(n?.children);
+          if (isDir) {
+            const name = typeof n?.name === 'string' && n.name ? String(n.name) : (p ? String(p).split(/[\\/]/).filter(Boolean).slice(-1)[0] : '');
+            if (name && excludedDirNames.has(name)) {
+              continue;
+            }
+            if (Array.isArray(n?.children)) walk(n.children);
+            continue;
+          }
+          if (!p) continue;
+          const rel = rootPath && p.startsWith(rootPath) ? p.slice(rootPath.length).replace(/^\//, '') : p;
+          out.push({ path: p, displayPath: rel || p });
+        }
+      };
+      walk(entries);
+      out.sort((a, b) => a.displayPath.localeCompare(b.displayPath));
+      setFilePickerItems(out);
+    } catch (e) {
+      console.error('Failed to load project files for reference:', e);
+      setFilePickerItems([]);
+    } finally {
+      setFilePickerBusy(false);
+    }
+  };
+
+  const toggleFileRef = (ref: FileRef) => {
+    setFileRefs((prev) => {
+      const exists = prev.some((x) => x.path === ref.path);
+      if (exists) return prev.filter((x) => x.path !== ref.path);
+      return [...prev, ref];
+    });
+  };
+
+  const buildAiContentWithRefs = async (raw: string) => {
+    const base = raw.trim();
+    if (!base) return '';
+    if (!fileRefs.length) return base;
+
+    const MAX_FILE_CHARS = 12000;
+    const blocks: string[] = [];
+    for (const r of fileRefs) {
+      try {
+        const text = await invoke<any>('read_file', { path: r.path });
+        const s = typeof text === 'string' ? text : String(text ?? '');
+        const truncated = s.length > MAX_FILE_CHARS;
+        const body = truncated ? s.slice(0, MAX_FILE_CHARS) : s;
+        blocks.push(`--- FILE: ${r.displayPath}${truncated ? ' (TRUNCATED)' : ''} ---\n${body}`);
+      } catch (e) {
+        blocks.push(`--- FILE: ${r.displayPath} (FAILED TO READ) ---`);
+        console.error('Failed to read referenced file:', r.path, e);
+      }
+    }
+
+    return (
+      'You are editing a codebase. The user referenced these files. Use them as context.\n' +
+      'Always reply in normal human language first (explain what you will change and why).\n' +
+      'If you propose changes to files, append a single JSON object at the END of your response inside a ```json code block with schema: {"edits": [{"path": string, "newText": string}]}.\n' +
+      'Each newText must be the full updated file content. Paths should be relative to the project root when possible.\n' +
+      'Do not output multiple edits blocks; output at most one JSON code block.\n\n' +
+      blocks.join('\n\n') +
+      '\n\n--- USER MESSAGE ---\n' +
+      base
+    );
+  };
+
+  const resolveEditPath = useMemo(() => {
+    return (p: string) => {
+      const raw = String(p ?? '').trim();
+      if (!raw) return '';
+      if (isAbsolutePath(raw)) return raw;
+      if (!rootPath) return raw;
+      return joinPath(rootPath, raw);
+    };
+  }, [rootPath]);
+
+  const applyEdit = async (msgId: string, edit: AiEditItem) => {
+    const abs = resolveEditPath(edit.path);
+    if (!abs) return;
+    await invoke('write_file', { path: abs, content: edit.newText });
+    setAppliedByMsgId((prev) => {
+      const byEdit = prev[msgId] ?? {};
+      return { ...prev, [msgId]: { ...byEdit, [edit.path]: true } };
+    });
+  };
+
+  const buildDisplayContentWithRefs = (raw: string) => {
+    const base = raw.trim();
+    if (!fileRefs.length) return base;
+    const list = fileRefs.map((r) => `@${r.displayPath}`).join('\n');
+    return `${base}\n\nReferenced files:\n${list}`;
+  };
+
   // 发送消息
   const handleSendMessage = async () => {
     if (!input.trim() || isConversationLoading) return;
@@ -92,7 +292,9 @@ const AIPanelInner: React.FC = () => {
     setInput(''); // 立即清空输入框
 
     try {
-      await sendMessage(messageContent);
+      const aiContent = await buildAiContentWithRefs(messageContent);
+      const displayContent = buildDisplayContentWithRefs(messageContent);
+      await sendMessage(aiContent, { displayContent });
     } catch (error) {
       console.error('发送消息失败:', error);
       // 如果发送失败，恢复输入框内容
@@ -445,6 +647,45 @@ ${error}
                     <div className="text-sm">
                       {message.role === 'assistant' ? (
                         <div className="prose prose-sm max-w-none">
+                          {(() => {
+                            const payload = tryParseEditsFromAssistant(String(message.content ?? ''));
+                            if (!payload) return null;
+                            const applied = appliedByMsgId[message.id] ?? {};
+                            return (
+                              <div className="mb-2 rounded-md border border-blue-200 bg-blue-50 p-2">
+                                <div className="text-xs font-medium text-blue-800 mb-1">Edits</div>
+                                <div className="flex flex-col gap-1">
+                                  {payload.edits.map((e, idx) => {
+                                    const done = Boolean(applied[e.path]);
+                                    return (
+                                      <div key={e.path + '_' + idx} className="flex items-center justify-between gap-2">
+                                        <div className="text-[11px] text-blue-900 truncate" title={e.path}>
+                                          {e.path}
+                                        </div>
+                                        <button
+                                          type="button"
+                                          className={
+                                            'text-[11px] px-2 py-1 rounded border ' +
+                                            (done
+                                              ? 'border-green-200 bg-green-50 text-green-700'
+                                              : 'border-blue-200 bg-white text-blue-700 hover:bg-blue-50')
+                                          }
+                                          onClick={() => {
+                                            if (done) return;
+                                            void applyEdit(message.id, e);
+                                          }}
+                                          disabled={done}
+                                          title={done ? 'Applied' : 'Apply'}
+                                        >
+                                          {done ? 'Applied' : 'Apply'}
+                                        </button>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })()}
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
                             rehypePlugins={[rehypeHighlight]}
@@ -520,11 +761,7 @@ ${error}
                   <Bot className="w-4 h-4 text-blue-600" />
                 </div>
                 <div className="bg-gray-100 rounded-lg px-3 py-2">
-                  <div className="flex items-center gap-1">
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-                  </div>
+                  <TypingIndicator />
                 </div>
               </div>
             )}
@@ -535,11 +772,7 @@ ${error}
                   <Bot className="w-4 h-4 text-blue-600" />
                 </div>
                 <div className="bg-gray-100 rounded-lg px-3 py-2">
-                  <div className="flex items-center gap-1">
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-                  </div>
+                  <TypingIndicator />
                 </div>
               </div>
             )}
@@ -547,16 +780,92 @@ ${error}
 
           {/* 输入区域 */}
           <div className="border-t border-gray-200 p-3">
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyPress={handleKeyPress}
-                placeholder={currentConversation ? "输入消息..." : "请先创建会话"}
-                disabled={isConversationLoading}
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-              />
+            {fileRefs.length ? (
+              <div className="mb-2 flex flex-wrap gap-1">
+                {fileRefs.map((r) => (
+                  <button
+                    key={r.path}
+                    type="button"
+                    className="text-[11px] px-2 py-1 rounded border border-gray-200 bg-gray-50 hover:bg-gray-100"
+                    title={r.path}
+                    onClick={() => toggleFileRef(r)}
+                  >
+                    @{r.displayPath}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            {filePickerOpen ? (
+              <div className="mb-2 rounded-lg border border-gray-200 bg-white shadow-sm">
+                <div className="p-2 border-b border-gray-200">
+                  <input
+                    type="text"
+                    value={filePickerQuery}
+                    onChange={(e) => setFilePickerQuery(e.target.value)}
+                    placeholder={filePickerBusy ? 'Loading...' : 'Search files...'}
+                    className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    disabled={filePickerBusy}
+                  />
+                </div>
+                <div className="max-h-52 overflow-auto p-1">
+                  {filePickerBusy ? (
+                    <div className="p-2 text-xs text-gray-500">Loading...</div>
+                  ) : filteredPickerItems.length === 0 ? (
+                    <div className="p-2 text-xs text-gray-500">No files</div>
+                  ) : (
+                    filteredPickerItems.slice(0, 200).map((it) => {
+                      const selected = fileRefs.some((x) => x.path === it.path);
+                      return (
+                        <button
+                          key={it.path}
+                          type="button"
+                          className={
+                            'w-full text-left px-2 py-1.5 rounded text-xs ' +
+                            (selected ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700')
+                          }
+                          title={it.path}
+                          onClick={() => toggleFileRef(it)}
+                        >
+                          {selected ? '✓ ' : ''}{it.displayPath}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="flex gap-2 items-start">
+              <div className="flex-1">
+                <input
+                  type="text"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyPress={handleKeyPress}
+                  placeholder={currentConversation ? "输入消息..." : "请先创建会话"}
+                  disabled={isConversationLoading}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!canReferenceFiles) return;
+                  const next = !filePickerOpen;
+                  setFilePickerOpen(next);
+                  if (next && filePickerItems.length === 0 && !filePickerBusy) {
+                    await loadProjectFiles();
+                  }
+                }}
+                disabled={!canReferenceFiles || isConversationLoading}
+                className="px-2.5 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                title={canReferenceFiles ? '引用文件' : '未打开项目目录'}
+              >
+                <FileText className="w-4 h-4 text-gray-700" />
+              </button>
+
               <button
                 onClick={isConversationLoading ? handleStop : handleSendMessage}
                 disabled={(!input.trim() && !isConversationLoading)}
@@ -721,10 +1030,10 @@ ${error}
 };
 
 // 主 AI 面板组件
-const AIPanel: React.FC = () => {
+const AIPanel: React.FC<{ rootPath?: string }> = ({ rootPath }) => {
   return (
     <ConversationProvider>
-      <AIPanelInner />
+      <AIPanelInner rootPath={rootPath} />
     </ConversationProvider>
   );
 };

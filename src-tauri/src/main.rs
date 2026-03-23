@@ -1699,6 +1699,20 @@ async fn conversation_send_message(conversation_id: String, content: String) -> 
     Ok(response)
 }
 
+/// 流式发送消息到会话
+#[tauri::command]
+async fn conversation_send_message_stream(
+    conversation_id: String,
+    content: String,
+    request_id: String,
+    window: tauri::Window,
+) -> Result<(), String> {
+    let manager = get_conversation_manager();
+    manager
+        .send_message_stream(&conversation_id, content, request_id, window)
+        .await
+}
+
 /// 获取所有会话列表
 #[tauri::command]
 async fn conversation_list() -> Result<Vec<Conversation>, String> {
@@ -1874,6 +1888,7 @@ fn main() {
             conversation_create,
             conversation_get,
             conversation_send_message,
+            conversation_send_message_stream,
             conversation_list,
             conversation_delete,
             conversation_cleanup,

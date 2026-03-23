@@ -511,6 +511,12 @@ const MonacoEditor = forwardRef<MonacoEditorHandle, MonacoEditorProps>(function 
     editorRef.current = editor;
     monacoRef.current = monaco;
 
+    try {
+      (window as any).__gopilotMonacoActiveEditor = editor;
+    } catch {
+      // ignore
+    }
+
     applyTsDefaults(monaco, extraLibsAddedRef);
 
     applyMonacoProjectConfig(monaco);
@@ -572,6 +578,18 @@ const MonacoEditor = forwardRef<MonacoEditorHandle, MonacoEditorProps>(function 
     monaco.editor.setTheme(getMonacoTheme());
 
     editor.focus();
+
+    try {
+      editor.onDidFocusEditorText(() => {
+        try {
+          (window as any).__gopilotMonacoActiveEditor = editor;
+        } catch {
+          // ignore
+        }
+      });
+    } catch {
+      // ignore
+    }
   };
 
   useEffect(() => {
