@@ -434,7 +434,6 @@ export default function GitPanel({
 
 示例（只作为格式参考，不要照抄）：
 fix(terminal): ensure unique session id to prevent duplicated prompt
-
 - use uuid v4 for terminal sessions
 - debounce resize events to reduce prompt redraw`;
 
@@ -467,8 +466,79 @@ fix(terminal): ensure unique session id to prevent duplicated prompt
         .map((l) => l.trim())
         .filter(Boolean);
 
+      const allowedTypes = ['feat', 'fix', 'refactor', 'perf', 'docs', 'test', 'chore', 'build', 'ci', 'style', 'revert'] as const;
+      type AllowedType = (typeof allowedTypes)[number];
       const headerRe = /^(feat|fix|refactor|perf|docs|test|chore|build|ci|style|revert)(\([^)]+\))?(!)?:\s+.+/i;
       const templateGarbageRe = /^(scope\s*:|<subject>|<scope>|<type>|<.*?>)$/i;
+
+      const inferScopeFromPaths = (paths: string[]): string => {
+        const joined = paths.join('\n');
+        const knownScopes = ['git', 'ai', 'terminal', 'editor', 'explorer'] as const;
+        for (const s of knownScopes) {
+          if (new RegExp(`(^|/)${s}(/|$)`, 'i').test(joined)) return s;
+        }
+        const first = paths[0] || '';
+        const m = first.match(/^(?:src\/)?([^\/]+)/i);
+        const raw = (m?.[1] || '').toLowerCase();
+        if (!raw) return 'app';
+        if (raw === 'components') return 'ui';
+        return raw.replace(/[^a-z0-9_-]+/g, '').slice(0, 32) || 'app';
+      };
+
+      const inferTypeFromPaths = (paths: string[]): AllowedType => {
+        const joined = paths.join('\n').toLowerCase();
+        if (/(package\.json|pnpm-lock|package-lock|yarn\.lock|vite\.config|tauri\.conf)/.test(joined)) return 'build';
+        if (/(readme\.md|\.md$)/.test(joined)) return 'docs';
+        if (/(test|__tests__|\.spec\.|\.test\.)/.test(joined)) return 'test';
+        return 'chore';
+      };
+
+      const sanitizeSubject = (s: string): string => {
+        let out = (s || '').trim();
+        out = out.replace(/^[-*\s]+/, '').trim();
+        out = out.replace(/^"|"$/g, '').trim();
+        out = out.replace(/<[^>]+>/g, '').trim();
+        out = out.replace(/^(scope\s*:|type\s*:|subject\s*:)/i, '').trim();
+        if (!out || /^(todo|tbd|n\/a)$/i.test(out)) return '';
+        // Lowercase first char when it's a letter.
+        out = out.replace(/^([A-Z])/, (m) => m.toLowerCase());
+        // Keep it reasonably short.
+        if (out.length > 72) out = out.slice(0, 72).trim();
+        return out;
+      };
+
+      const coerceHeader = (candidate: string, paths: string[]): string => {
+        const fallbackType = inferTypeFromPaths(paths);
+        const fallbackScope = inferScopeFromPaths(paths);
+
+        const raw = String(candidate || '').trim();
+        // Try exact conventional header first.
+        if (headerRe.test(raw)) {
+          const m = raw.match(/^(feat|fix|refactor|perf|docs|test|chore|build|ci|style|revert)(\([^)]+\))?(!)?:\s+(.+)$/i);
+          const type = (m?.[1] || fallbackType).toLowerCase() as AllowedType;
+          const scope = (m?.[2] || '').trim();
+          const bang = (m?.[3] || '').trim();
+          const subject = sanitizeSubject(m?.[4] || '') || 'update changes';
+          return `${type}${scope}${bang}: ${subject}`;
+        }
+
+        // Try to extract a type from free-form output.
+        const typeMatch = raw.match(/\b(feat|fix|refactor|perf|docs|test|chore|build|ci|style|revert)\b/i);
+        const type = ((typeMatch?.[1] || fallbackType) as string).toLowerCase() as AllowedType;
+
+        // Try to extract a scope like "(scope)".
+        const scopeMatch = raw.match(/\(([^)]+)\)/);
+        const extractedScope = (scopeMatch?.[1] || '').trim();
+        const scope = extractedScope
+          ? extractedScope.replace(/[^a-z0-9_-]+/gi, '').slice(0, 32)
+          : fallbackScope;
+
+        // Try to extract subject part after ':'
+        const afterColon = raw.includes(':') ? raw.split(':').slice(1).join(':') : raw;
+        const subject = sanitizeSubject(afterColon) || 'update changes';
+
+        return `${type}${scope ? `(${scope})` : ''}: ${subject}`;
+      };
 
       let headerLine = lines.find((l) => headerRe.test(l)) ?? '';
       if (!headerLine) {
@@ -481,11 +551,9 @@ fix(terminal): ensure unique session id to prevent duplicated prompt
         .replace(/^\s*(type\s*:|scope\s*:|subject\s*:)/i, '')
         .trim();
 
-      // If still not valid, hard-fail so user sees the error instead of a broken message.
-      if (!headerLine || !headerRe.test(headerLine)) {
-        setCommitAiError('AI 返回的 commit message 不符合 Conventional Commits header 格式');
-        return;
-      }
+      // Always coerce into a valid Conventional Commits header to avoid blocking user.
+      const coercedHeader = coerceHeader(headerLine || lines[0] || '', uniquePaths);
+      headerLine = coercedHeader;
 
       const bodyLines: string[] = [];
       let inBody = false;
