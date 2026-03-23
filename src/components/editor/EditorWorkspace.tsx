@@ -6,9 +6,12 @@ import FileViewer from '@/components/viewers/FileViewer';
 import { setMonacoProjectConfig } from './monacoProject';
 import { applyPdfAnnotations } from '@/components/viewers/PdfEditorViewer';
 import ContextMenu, { type ContextMenuItem } from '@/components/layouts/ContextMenu';
+import Modal from '@/components/ui/Modal';
+import { DiffEditor } from '@monaco-editor/react';
 
 const WORKSPACE_TABS_KEY = 'gopilot.workspace.openFiles';
 const WORKSPACE_ACTIVE_KEY = 'gopilot.workspace.activeFile';
+const AI_EDIT_LAST_INSTRUCTION_KEY = 'gopilot.aiEdit.lastInstruction';
 
 type TabState = {
   id: string;
@@ -380,6 +383,14 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
 ) {
   const [tabs, setTabs] = useState<TabState[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [aiEditOpen, setAiEditOpen] = useState(false);
+  const [aiEditInstruction, setAiEditInstruction] = useState('');
+  const [aiEditBusy, setAiEditBusy] = useState(false);
+  const [aiEditError, setAiEditError] = useState('');
+  const [aiPreviewOpen, setAiPreviewOpen] = useState(false);
+  const [aiPreviewText, setAiPreviewText] = useState('');
+  const [aiEditUseSelection, setAiEditUseSelection] = useState(false);
+  const aiEditRequestIdRef = useRef(0);
   const [ctx, setCtx] = useState<{ open: boolean; x: number; y: number; tabId: string | null }>({
     open: false,
     x: 0,
@@ -514,6 +525,167 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
   const updateTab = useCallback((id: string, patch: Partial<TabState>) => {
     setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   }, []);
+
+  const canAiEdit = useMemo(() => {
+    if (!activeTab) return false;
+    if (activeTab.readOnly) return false;
+    return activeTab.viewerId === 'text' || activeTab.viewerId === 'markdown';
+  }, [activeTab]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(AI_EDIT_LAST_INSTRUCTION_KEY);
+      if (raw && typeof raw === 'string') {
+        setAiEditInstruction(raw);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(AI_EDIT_LAST_INSTRUCTION_KEY, aiEditInstruction);
+    } catch {
+      // ignore
+    }
+  }, [aiEditInstruction]);
+
+  const getActiveEditorSelectionText = useCallback(() => {
+    try {
+      const ed = (window as any).__gopilotMonacoActiveEditor;
+      if (!ed || typeof ed.getSelection !== 'function') return '';
+      const model = typeof ed.getModel === 'function' ? ed.getModel() : null;
+      if (!model || !activeTab?.path) return '';
+
+      const uriPath = typeof model?.uri?.fsPath === 'string' ? model.uri.fsPath : typeof model?.uri?.path === 'string' ? model.uri.path : '';
+      const normalizedUri = String(uriPath ?? '').replace(/^file:\/\//, '');
+      const normalizedTab = String(activeTab.path ?? '');
+      if (normalizedUri && normalizedTab && !normalizedUri.endsWith(normalizedTab) && normalizedUri !== normalizedTab) {
+        return '';
+      }
+
+      const sel = ed.getSelection();
+      if (!sel || typeof model.getValueInRange !== 'function') return '';
+      const text = model.getValueInRange(sel);
+      return typeof text === 'string' ? text : '';
+    } catch {
+      return '';
+    }
+  }, [activeTab?.path]);
+
+  const openAiEdit = useCallback((opts?: { useSelection?: boolean }) => {
+    if (!activeTab) return;
+    if (!canAiEdit) return;
+    setAiEditError('');
+    setAiEditUseSelection(Boolean(opts?.useSelection));
+    setAiPreviewText('');
+    setAiPreviewOpen(false);
+    setAiEditOpen(true);
+  }, [activeTab, canAiEdit]);
+
+  const normalizeAiJson = useCallback((raw: string) => {
+    const s = String(raw ?? '').trim();
+    if (!s) return '';
+    // Strip markdown code fences if present
+    if (s.startsWith('```')) {
+      const idx = s.indexOf('\n');
+      const body = idx >= 0 ? s.slice(idx + 1) : s;
+      return body.replace(/```\s*$/g, '').trim();
+    }
+    return s;
+  }, []);
+
+  const stopAiEdit = useCallback(() => {
+    aiEditRequestIdRef.current += 1;
+    setAiEditBusy(false);
+    setAiEditError('Cancelled');
+  }, []);
+
+  const generateAiPreview = useCallback(async () => {
+    if (!activeTab) return;
+    if (!canAiEdit) return;
+    const instruction = aiEditInstruction.trim();
+    if (!instruction) return;
+    if (aiEditBusy) return;
+
+    const requestId = aiEditRequestIdRef.current + 1;
+    aiEditRequestIdRef.current = requestId;
+
+    setAiEditBusy(true);
+    setAiEditError('');
+    try {
+      const cfg = await invoke<any>('ai_get_config');
+      const model = typeof cfg?.model === 'string' && cfg.model.trim() ? cfg.model : 'gpt-3.5-turbo';
+
+      const MAX_SOURCE_CHARS = 20000;
+      const source = activeTab.value ?? '';
+      const truncatedSource = source.length > MAX_SOURCE_CHARS ? source.slice(0, MAX_SOURCE_CHARS) : source;
+      const truncated = source.length > MAX_SOURCE_CHARS;
+
+      const selectionText = aiEditUseSelection ? getActiveEditorSelectionText() : '';
+      const MAX_SELECTION_CHARS = 4000;
+      const truncatedSelection = selectionText.length > MAX_SELECTION_CHARS ? selectionText.slice(0, MAX_SELECTION_CHARS) : selectionText;
+      const selectionTruncated = selectionText.length > MAX_SELECTION_CHARS;
+
+      const selectionBlock = selectionText
+        ? `Selected text${selectionTruncated ? ' (TRUNCATED)' : ''}:\n${truncatedSelection}\n\n`
+        : '';
+
+      const system = 'You are an AI coding assistant. You must output ONLY valid JSON with no extra text. Schema: {"newText": string}. newText must be the full updated file content after applying the user instruction. Do not wrap in markdown. Do not include explanations.';
+      const user = `File path: ${activeTab.path}\n` +
+        `Language: ${activeTab.language}\n` +
+        `Instruction: ${instruction}\n\n` +
+        selectionBlock +
+        `Current file content${truncated ? ' (TRUNCATED)' : ''}:\n` +
+        truncatedSource;
+
+      const resp = await invoke<any>('ai_chat', {
+        request: {
+          model,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+          ],
+          temperature: 0.2,
+          max_tokens: 2000,
+          stream: false,
+        },
+      });
+
+      if (aiEditRequestIdRef.current !== requestId) return;
+
+      const content = resp?.choices?.[0]?.message?.content != null ? String(resp.choices[0].message.content) : '';
+      const normalized = normalizeAiJson(content);
+      const parsed = JSON.parse(normalized) as any;
+      const newText = typeof parsed?.newText === 'string' ? parsed.newText : '';
+      if (!newText) {
+        setAiEditError('AI 返回格式不正确：缺少 newText');
+        return;
+      }
+
+      setAiPreviewText(newText);
+      setAiEditOpen(false);
+      setAiPreviewOpen(true);
+    } catch (e: any) {
+      if (aiEditRequestIdRef.current !== requestId) return;
+      const msg = typeof e === 'string' ? e : e?.message ? String(e.message) : 'AI Edit failed.';
+      setAiEditError(msg);
+    } finally {
+      if (aiEditRequestIdRef.current === requestId) {
+        setAiEditBusy(false);
+      }
+    }
+  }, [activeTab, aiEditBusy, aiEditInstruction, aiEditUseSelection, canAiEdit, getActiveEditorSelectionText, normalizeAiJson]);
+
+  const applyAiEdit = useCallback(() => {
+    if (!activeTab) return;
+    if (!canAiEdit) return;
+    if (!aiPreviewText) return;
+    updateTab(activeTab.id, { value: aiPreviewText });
+    setAiPreviewOpen(false);
+    setAiPreviewText('');
+  }, [activeTab, aiPreviewText, canAiEdit, updateTab]);
 
   const openSqlConsole = useCallback(async (connectionId: string, title?: string) => {
     if (!connectionId) return;
@@ -896,6 +1068,8 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
   const ctxItems: ContextMenuItem[] = useMemo(() => {
     const tab = tabs.find((t) => t.id === ctx.tabId) ?? null;
     const dirty = tab ? tab.value !== tab.savedValue : false;
+    const tabCanAiEdit = tab ? !tab.readOnly && (tab.viewerId === 'text' || tab.viewerId === 'markdown') : false;
+    const tabHasActiveSelection = Boolean(tab && tab.id === activeId && getActiveEditorSelectionText().trim());
     const globalItems: ContextMenuItem[] = [
       {
         id: 'save_all',
@@ -929,6 +1103,26 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
           void saveTab(tab);
         },
       },
+      {
+        id: 'ai_edit',
+        label: 'AI Edit',
+        disabled: !tab || !tabCanAiEdit,
+        onClick: () => {
+          if (!tab) return;
+          setActiveId(tab.id);
+          window.setTimeout(() => openAiEdit({ useSelection: false }), 0);
+        },
+      },
+      {
+        id: 'ai_edit_selection',
+        label: 'AI Edit (Selection)',
+        disabled: !tab || !tabCanAiEdit || !tabHasActiveSelection,
+        onClick: () => {
+          if (!tab) return;
+          setActiveId(tab.id);
+          window.setTimeout(() => openAiEdit({ useSelection: true }), 0);
+        },
+      },
       ...globalItems,
       {
         id: 'close',
@@ -949,7 +1143,7 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
         },
       },
     ];
-  }, [tabs, ctx.tabId, closeAll, closeOthers, closeTab, saveAll, saveTab]);
+  }, [tabs, ctx.tabId, activeId, closeAll, closeOthers, closeTab, getActiveEditorSelectionText, openAiEdit, saveAll, saveTab]);
 
   const onChangeValue = useCallback((value: string) => {
     if (!activeTab) return;
@@ -1025,11 +1219,29 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
   }, [openSqlConsole, tabs, setTabs, setActiveId]);
 
   useEffect(() => {
-    // Keyboard shortcuts can be added here later if needed
-    return () => {
-      // cleanup
+    const onKeyDown = (e: KeyboardEvent) => {
+      const key = String(e.key || '').toLowerCase();
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      if (key !== 'i') return;
+      e.preventDefault();
+      if (!activeTab || !canAiEdit) return;
+      openAiEdit({ useSelection: Boolean(e.shiftKey) });
     };
-  }, []);
+
+    try {
+      window.addEventListener('keydown', onKeyDown);
+    } catch {
+      return;
+    }
+    return () => {
+      try {
+        window.removeEventListener('keydown', onKeyDown);
+      } catch {
+        // ignore
+      }
+    };
+  }, [activeTab, canAiEdit, openAiEdit]);
 
   // 暴露方法给父组件
   useImperativeHandle(_ref, () => ({
@@ -1050,6 +1262,100 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
         onContextMenu={openContextMenu}
       />
 
+      <Modal
+        open={aiEditOpen}
+        title="AI Edit (Single File)"
+        onClose={() => {
+          if (aiEditBusy) return;
+          setAiEditOpen(false);
+        }}
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              className="text-xs px-3 py-1.5 rounded border border-gray-200 hover:bg-gray-50"
+              onClick={() => {
+                if (aiEditBusy) return;
+                setAiEditOpen(false);
+              }}
+              disabled={aiEditBusy}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="text-xs px-3 py-1.5 rounded border border-gray-200 hover:bg-gray-50"
+              onClick={stopAiEdit}
+              disabled={!aiEditBusy}
+            >
+              Stop
+            </button>
+            <button
+              type="button"
+              className="text-xs px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+              onClick={() => void generateAiPreview()}
+              disabled={aiEditBusy || !aiEditInstruction.trim() || !canAiEdit}
+            >
+              {aiEditBusy ? 'Generating...' : 'Generate'}
+            </button>
+          </div>
+        }
+      >
+        {!activeTab ? <div className="text-xs text-gray-500">No active file.</div> : null}
+        {activeTab && !canAiEdit ? (
+          <div className="text-xs text-gray-500">This file is read-only or not supported for AI Edit.</div>
+        ) : null}
+        {activeTab ? <div className="text-[11px] text-gray-500 mb-2 truncate">{activeTab.path}</div> : null}
+        <textarea
+          value={aiEditInstruction}
+          onChange={(e) => setAiEditInstruction(e.target.value)}
+          placeholder="Describe the change you want..."
+          className="w-full text-sm px-3 py-2 border border-gray-200 rounded min-h-[96px]"
+          disabled={aiEditBusy || !canAiEdit}
+        />
+        {aiEditError ? <div className="mt-2 text-xs text-red-600 whitespace-pre-wrap">{aiEditError}</div> : null}
+      </Modal>
+
+      <Modal
+        open={aiPreviewOpen}
+        title="AI Edit Preview"
+        onClose={() => setAiPreviewOpen(false)}
+        widthClassName="w-[960px]"
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              className="text-xs px-3 py-1.5 rounded border border-gray-200 hover:bg-gray-50"
+              onClick={() => setAiPreviewOpen(false)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="text-xs px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+              onClick={() => applyAiEdit()}
+              disabled={!aiPreviewText || !canAiEdit}
+            >
+              Apply
+            </button>
+          </div>
+        }
+      >
+        {activeTab ? (
+          <div className="h-[60vh]">
+            <DiffEditor
+              original={activeTab.value ?? ''}
+              modified={aiPreviewText}
+              language={activeTab.language}
+              height="60vh"
+              options={{ readOnly: true, renderSideBySide: true, minimap: { enabled: false } }}
+            />
+          </div>
+        ) : (
+          <div className="text-xs text-gray-500">No active file.</div>
+        )}
+      </Modal>
+
       <ContextMenu
         open={ctx.open}
         x={ctx.x}
@@ -1060,6 +1366,30 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
 
       <div className="flex-1 min-h-0">
         {activeTab ? (
+          <div className="h-full flex flex-col">
+            <div className="h-10 px-3 border-b border-gray-200 bg-white flex items-center justify-between flex-shrink-0">
+              <div className="text-xs text-gray-500 truncate">{activeTab.title}</div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="text-xs px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
+                  onClick={() => openAiEdit({ useSelection: false })}
+                  disabled={!canAiEdit}
+                  title="AI Edit"
+                >
+                  AI Edit
+                </button>
+                <button
+                  type="button"
+                  className="text-xs px-2 py-1 rounded hover:bg-gray-100 active:bg-gray-200"
+                  onClick={() => openAiEdit({ useSelection: true })}
+                  disabled={!canAiEdit || !getActiveEditorSelectionText().trim()}
+                  title="AI Edit (Selection)"
+                >
+                  AI Edit (Selection)
+                </button>
+              </div>
+            </div>
           <FileViewer
             tab={{
               id: activeTab.id,
@@ -1074,6 +1404,7 @@ const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(
             assetUrl={activeTab.assetUrl}
             onChange={onChangeValue}
           />
+          </div>
         ) : (
           <div className="h-full flex items-center justify-center">
             <div className="w-[520px] max-w-[92%]">

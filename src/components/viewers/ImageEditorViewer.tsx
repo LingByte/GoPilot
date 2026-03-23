@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   ZoomIn, 
   ZoomOut, 
@@ -7,10 +7,7 @@ import {
   Download, 
   FlipHorizontal,
   FlipVertical,
-  Sun,
-  Contrast,
   Palette,
-  Crop,
   Info,
   X
 } from 'lucide-react';
@@ -39,7 +36,7 @@ interface ImageFilters {
   sepia: number;
 }
 
-export default function ImageEditorViewer({ assetUrl, value, onChange, readOnly }: ImageEditorViewerProps) {
+export default function ImageEditorViewer({ assetUrl, value, onChange: _onChange, readOnly: _readOnly }: ImageEditorViewerProps) {
   const [scale, setScale] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [flipH, setFlipH] = useState(false);

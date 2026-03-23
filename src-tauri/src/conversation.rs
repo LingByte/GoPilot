@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::ai::{ChatMessage, ChatRequest, ChatResponse, AiConfig, create_ai_client};
+use futures_util::StreamExt;
+
+use crate::ai::{AiConfig, AiError, ChatMessage, ChatRequest, ChatResponse, ChatStreamChunk, create_ai_client};
 
 /// 会话消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,6 +269,139 @@ impl ConversationManager {
         conversation.add_message(assistant_message);
         
         Ok(response)
+    }
+
+    /// 流式发送消息
+    pub async fn send_message_stream(
+        &self,
+        conversation_id: &str,
+        content: String,
+        request_id: String,
+        window: tauri::Window,
+    ) -> Result<(), String> {
+        #[derive(Serialize, Clone)]
+        struct StreamPayload {
+            request_id: String,
+            content: String,
+        }
+
+        #[derive(Serialize, Clone)]
+        struct EndPayload {
+            request_id: String,
+        }
+
+        #[derive(Serialize, Clone)]
+        struct ErrorPayload {
+            request_id: String,
+            error: String,
+        }
+
+        // Phase 1: write-lock only for updating conversation + building request
+        let (request, ai_config) = {
+            let mut conversations = self.conversations.write().await;
+            let conversation = conversations
+                .get_mut(conversation_id)
+                .ok_or("会话不存在")?;
+
+            // 添加用户消息
+            let user_message = ConversationMessage {
+                id: Uuid::new_v4().to_string(),
+                role: "user".to_string(),
+                content: content.clone(),
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                metadata: None,
+            };
+            conversation.add_message(user_message);
+
+            let context_messages = conversation.get_context_messages();
+            let req = ChatRequest {
+                model: conversation.ai_config.model.clone(),
+                messages: context_messages,
+                temperature: Some(0.7),
+                max_tokens: Some(conversation.config.max_tokens),
+                stream: Some(true),
+            };
+            (req, conversation.ai_config.clone())
+        };
+
+        // Phase 2: stream without holding the lock
+        let client = create_ai_client(ai_config);
+        let stream: Pin<Box<dyn futures_util::Stream<Item = Result<ChatStreamChunk, AiError>> + Send>> =
+            client.chat_stream(request).await.map_err(|e| format!("AI 调用失败: {}", e))?;
+
+        let mut stream = stream;
+        let mut assistant_content = String::new();
+        let start_time = SystemTime::now();
+
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    if let Some(choice) = chunk.choices.first() {
+                        if let Some(content_piece) = &choice.delta.content {
+                            assistant_content.push_str(content_piece);
+                            let _ = window.emit(
+                                "conversation-chat-chunk",
+                                StreamPayload {
+                                    request_id: request_id.clone(),
+                                    content: content_piece.to_string(),
+                                },
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = window.emit(
+                        "conversation-chat-error",
+                        ErrorPayload {
+                            request_id: request_id.clone(),
+                            error: e.to_string(),
+                        },
+                    );
+                    return Err(format!("AI 流式调用失败: {}", e));
+                }
+            }
+        }
+
+        // Phase 3: write-lock again to append assistant message
+        {
+            let mut conversations = self.conversations.write().await;
+            let conversation = conversations
+                .get_mut(conversation_id)
+                .ok_or("会话不存在")?;
+
+            let response_time_ms = start_time
+                .elapsed()
+                .unwrap_or_default()
+                .as_millis() as u64;
+
+            let assistant_message = ConversationMessage {
+                id: Uuid::new_v4().to_string(),
+                role: "assistant".to_string(),
+                content: assistant_content,
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                metadata: Some(MessageMetadata {
+                    tokens_used: None,
+                    model: Some(conversation.ai_config.model.clone()),
+                    response_time_ms: Some(response_time_ms),
+                }),
+            };
+
+            conversation.add_message(assistant_message);
+        }
+
+        let _ = window.emit(
+            "conversation-chat-end",
+            EndPayload {
+                request_id: request_id.clone(),
+            },
+        );
+        Ok(())
     }
 
     /// 获取所有会话列表

@@ -655,7 +655,7 @@ function EditorShell() {
                             {
                                 id: 'ai',
                                 title: 'AI Assistant',
-                                children: <AIPanel />,
+                                children: <AIPanel rootPath={rootPath} />,
                                 minWidth: 350,
                                 defaultWidth: 420,
                             },

@@ -28,15 +28,23 @@ export default function BottomPanel({
   const [terminals, setTerminals] = useState<Array<{ id: string; cwd: string; title: string }>>([]);
   const [activeTerminalId, setActiveTerminalId] = useState<string>('');
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+  const didBootstrapTerminalRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (!open) return;
     if (terminals.length > 0) return;
+    if (didBootstrapTerminalRef.current) return;
+    didBootstrapTerminalRef.current = true;
     const id = `t_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     const cwd = rootPath;
     setTerminals([{ id, cwd, title: '1' }]);
     setActiveTerminalId(id);
   }, [open, rootPath, terminals.length]);
+
+  useEffect(() => {
+    if (open) return;
+    didBootstrapTerminalRef.current = false;
+  }, [open]);
 
   const addTerminal = useCallback(() => {
     const nextIndex = terminals.length + 1;

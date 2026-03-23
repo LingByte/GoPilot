@@ -1,4 +1,3 @@
-import React from 'react';
 import type { FileViewerRenderer, FileViewerRenderParams } from './types';
 import MonacoEditor from '@/components/editor/MonacoEditor';
 import { useCallback, useEffect, useMemo, useState } from 'react';
