@@ -1,24 +1,37 @@
 import { useEffect, useRef } from 'react';
 import { Terminal } from 'xterm';
+import { FitAddon } from 'xterm-addon-fit';
 import 'xterm/css/xterm.css';
 
 export default function XtermTerminal({ cwd, active }: { cwd: string; active: boolean }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
   const roRef = useRef<ResizeObserver | null>(null);
   const sessionIdRef = useRef<string>('');
   const unlistenRef = useRef<null | (() => void)>(null);
+  const resizeTimerRef = useRef<number | null>(null);
+  const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const resizeCooldownUntilRef = useRef<number>(0);
+  const cooldownTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+
+    // Ensure StrictMode remounts don't leave previous terminal DOM/content behind.
+    try {
+      host.innerHTML = '';
+    } catch {
+      // ignore
+    }
 
     const term = new Terminal({
       fontSize: 13,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
       cursorBlink: true,
       scrollback: 2000,
-      convertEol: true,
+      convertEol: false,
       rows: 30, // 固定行数
       cols: 80, // 固定列数
       theme: {
@@ -27,55 +40,70 @@ export default function XtermTerminal({ cwd, active }: { cwd: string; active: bo
       },
     });
 
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+
     term.open(host);
 
-    termRef.current = term;
+    try {
+      fitAddon.fit();
+    } catch {
+      // ignore
+    }
 
-    // 手动处理尺寸调整
-    const resizeTerminal = () => {
-      const currentTerm = termRef.current;
-      if (!host || !currentTerm) return;
-      
-      const rect = host.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) return;
-      
-      // 计算新的行列数
-      const charWidth = 8; // 近似字符宽度
-      const charHeight = 17; // 近似字符高度 (13px fontSize + 4px line height)
-      
-      const cols = Math.floor(rect.width / charWidth);
-      const rows = Math.floor(rect.height / charHeight);
-      
-      if (cols > 0 && rows > 0) {
-        try {
-          currentTerm.resize(cols, rows);
-          
-          // 通知后端调整尺寸
-          const sid = sessionIdRef.current;
-          if (sid) {
-            void import('@tauri-apps/api/tauri').then(({ invoke }) =>
-              invoke('terminal_resize', { sessionId: sid, cols, rows }).catch(() => null),
-            );
-          }
-        } catch (error) {
-          console.debug('Terminal resize error (ignored):', error);
-        }
+    termRef.current = term;
+    fitRef.current = fitAddon;
+
+    const scheduleResize = () => {
+      if (resizeTimerRef.current) {
+        window.clearTimeout(resizeTimerRef.current);
       }
+      resizeTimerRef.current = window.setTimeout(() => {
+        resizeTimerRef.current = null;
+
+        // Avoid sending early resizes right after PTY spawn. zsh can redraw prompt on resize
+        // and produce duplicated prompt lines.
+        if (Date.now() < resizeCooldownUntilRef.current) return;
+
+        const currentTerm = termRef.current;
+        const fit = fitRef.current;
+        if (!currentTerm || !fit) return;
+        try {
+          fit.fit();
+        } catch {
+          return;
+        }
+
+        const cols = currentTerm.cols;
+        const rows = currentTerm.rows;
+        if (!cols || !rows) return;
+
+        const last = lastSizeRef.current;
+        if (last && last.cols === cols && last.rows === rows) return;
+        lastSizeRef.current = { cols, rows };
+
+        const sid = sessionIdRef.current;
+        if (!sid) return;
+        void import('@tauri-apps/api/tauri').then(({ invoke }) =>
+          invoke('terminal_resize', { sessionId: sid, cols, rows }).catch(() => null),
+        );
+      }, 150);
     };
 
-    const ro = new ResizeObserver(resizeTerminal);
+    const ro = new ResizeObserver(scheduleResize);
     ro.observe(host);
     roRef.current = ro;
-
-    // 延迟调整初始尺寸
-    setTimeout(resizeTerminal, 100);
 
     let disposed = false;
 
     (async () => {
       try {
         const { invoke } = await import('@tauri-apps/api/tauri');
-        const dims = { cols: 80, rows: 30 }; // 使用固定尺寸
+        const currentTerm = termRef.current;
+        const dims = {
+          cols: currentTerm?.cols ? Number(currentTerm.cols) : 80,
+          rows: currentTerm?.rows ? Number(currentTerm.rows) : 30,
+        }; // 使用固定尺寸
         const sid = (await invoke<string>('terminal_start', {
           cwd: cwd || undefined,
           cols: dims.cols,
@@ -86,6 +114,18 @@ export default function XtermTerminal({ cwd, active }: { cwd: string; active: bo
           return;
         }
         sessionIdRef.current = sid;
+        lastSizeRef.current = { cols: dims.cols, rows: dims.rows };
+
+        // Cooldown: suppress resize events briefly after spawning shell.
+        resizeCooldownUntilRef.current = Date.now() + 1500;
+        if (cooldownTimerRef.current) {
+          window.clearTimeout(cooldownTimerRef.current);
+        }
+        cooldownTimerRef.current = window.setTimeout(() => {
+          cooldownTimerRef.current = null;
+          resizeCooldownUntilRef.current = 0;
+          scheduleResize();
+        }, 1550);
 
         const { listen } = await import('@tauri-apps/api/event');
         const unlisten = await listen<any>('terminal-data', (event) => {
@@ -108,6 +148,19 @@ export default function XtermTerminal({ cwd, active }: { cwd: string; active: bo
 
     return () => {
       disposed = true;
+
+      if (resizeTimerRef.current) {
+        window.clearTimeout(resizeTimerRef.current);
+        resizeTimerRef.current = null;
+      }
+
+      if (cooldownTimerRef.current) {
+        window.clearTimeout(cooldownTimerRef.current);
+        cooldownTimerRef.current = null;
+      }
+      resizeCooldownUntilRef.current = 0;
+
+      lastSizeRef.current = null;
       try {
         ro.disconnect();
       } catch {
@@ -134,6 +187,13 @@ export default function XtermTerminal({ cwd, active }: { cwd: string; active: bo
         // ignore
       }
       termRef.current = null;
+      fitRef.current = null;
+
+      try {
+        host.innerHTML = '';
+      } catch {
+        // ignore
+      }
     };
   }, [cwd]);
 
@@ -142,37 +202,7 @@ export default function XtermTerminal({ cwd, active }: { cwd: string; active: bo
     const term = termRef.current;
     const sid = sessionIdRef.current;
     if (!term || !sid) return;
-
-    // 当终端变为活跃时，重新调整尺寸
-    const resizeTerminal = () => {
-      if (!termRef.current) return;
-      
-      const host = hostRef.current;
-      if (!host) return;
-      
-      const rect = host.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) return;
-      
-      const charWidth = 8;
-      const charHeight = 17;
-      
-      const cols = Math.floor(rect.width / charWidth);
-      const rows = Math.floor(rect.height / charHeight);
-      
-      if (cols > 0 && rows > 0) {
-        try {
-          termRef.current?.resize(cols, rows);
-          
-          void import('@tauri-apps/api/tauri').then(({ invoke }) =>
-            invoke('terminal_resize', { sessionId: sid, cols, rows }).catch(() => null),
-          );
-        } catch (error) {
-          console.debug('Terminal resize error (ignored):', error);
-        }
-      }
-    };
-
-    setTimeout(resizeTerminal, 50);
+    // No-op: resizing is handled by ResizeObserver (debounced).
   }, [active]);
 
   return (

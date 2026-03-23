@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import GitCommitGraph from '@/components/ui/GitCommitGraph';
 import Modal from '@/components/ui/Modal';
+import { RefreshCw } from 'lucide-react';
 
 type GitBranch = {
   name: string;
@@ -164,15 +165,29 @@ export default function GitPanel({
       setGraphLines(graph);
 
       try {
-        const sb = await invoke<string>('execute_command', {
-          command: 'git status -sb',
+        // Prefer porcelain v2 (stable) for ahead/behind
+        const porcelain = await invoke<string>('execute_command', {
+          command: 'git status --porcelain=2 --branch',
           working_dir: rootPath,
         });
-        const firstLine = String(sb || '').split(/\r?\n/)[0] ?? '';
-        const aheadMatch = firstLine.match(/\[.*?ahead\s+(\d+).*?\]/);
-        const behindMatch = firstLine.match(/\[.*?behind\s+(\d+).*?\]/);
-        setAheadBy(aheadMatch ? Number(aheadMatch[1]) || 0 : 0);
-        setBehindBy(behindMatch ? Number(behindMatch[1]) || 0 : 0);
+        const lines = String(porcelain || '').split(/\r?\n/);
+        const abLine = lines.find((l) => l.startsWith('# branch.ab')) ?? '';
+        const abMatch = abLine.match(/#\s+branch\.ab\s+\+(\d+)\s+\-(\d+)/);
+        if (abMatch) {
+          setAheadBy(Number(abMatch[1]) || 0);
+          setBehindBy(Number(abMatch[2]) || 0);
+        } else {
+          // Fallback: parse `git status -sb`
+          const sb = await invoke<string>('execute_command', {
+            command: 'git status -sb',
+            working_dir: rootPath,
+          });
+          const firstLine = String(sb || '').split(/\r?\n/)[0] ?? '';
+          const aheadMatch = firstLine.match(/\[.*?ahead\s+(\d+).*?\]/);
+          const behindMatch = firstLine.match(/\[.*?behind\s+(\d+).*?\]/);
+          setAheadBy(aheadMatch ? Number(aheadMatch[1]) || 0 : 0);
+          setBehindBy(behindMatch ? Number(behindMatch[1]) || 0 : 0);
+        }
       } catch {
         setAheadBy(0);
         setBehindBy(0);
@@ -399,7 +414,29 @@ export default function GitPanel({
       const stagedList = stagedLocal.map((s) => `${s.status}\t${s.path}`).join('\n');
       const unstagedList = unstagedLocal.map((s) => `${s.status}\t${s.path}`).join('\n');
 
-      const system = `你是 GoPilot 的 Git commit message 生成助手。请根据提供的改动信息生成一个高质量、信息全面、符合 Conventional Commits 的 commit message。\n\n输出格式要求（严格）：\n- 只输出 commit message 纯文本，不要解释、不要 markdown、不要代码块\n- 第一行必须是：<type>(<scope>): <subject>\n  - type 必须从：feat, fix, refactor, perf, docs, test, chore, build, ci, style, revert 里选\n  - scope 可选（建议从模块/目录名归纳，如 git, ai, editor, explorer 等），没有就省略括号\n  - subject 使用英文小写开头（除专有名词），尽量 <= 72 字符\n- 如有必要，可以追加 body（空一行后），用条目列出关键改动点（每条以 - 开头）\n- 如有 BREAKING CHANGE：在 footer（空一行后）写 BREAKING CHANGE: ...，并在 type 后加 !（如 feat!: ...）\n\n内容要求：\n- 必须覆盖最重要的用户可感知变化与关键技术改动\n- 如果改动包含 bug 修复，要明确修复点\n- 如果改动只是格式/依赖/构建/工具链，也要选对 type（例如 chore/build/ci/style）\n- 如果信息不足，做最合理的概括，但不要编造不存在的功能`;
+      const system = `你是 GoPilot 的 Git commit message 生成助手。请根据提供的改动信息生成一个高质量、信息全面、符合 Conventional Commits 的 commit message。
+
+输出格式要求（严格）：
+- 只输出 commit message 纯文本，不要解释、不要 markdown、不要代码块
+- 第一行必须是 Conventional Commits header：<type>(<scope>): <subject> 或 <type>: <subject>
+  - type 必须从：feat, fix, refactor, perf, docs, test, chore, build, ci, style, revert 里选
+  - scope 可选（建议从模块/目录名归纳，如 git, ai, terminal, editor, explorer 等），没有就省略括号
+  - subject 必须是具体内容，禁止出现占位符/模板：禁止使用 <subject>、<scope>、"scope: xxx" 这种模板段落
+  - subject 使用英文小写开头（除专有名词），尽量 <= 72 字符
+- 如有必要，可以追加 body（空一行后），用条目列出关键改动点（每条以 - 开头）
+- 如有 BREAKING CHANGE：在 footer（空一行后）写 BREAKING CHANGE: ...，并在 type 后加 !（如 feat!: ...）
+
+内容要求：
+- 必须覆盖最重要的用户可感知变化与关键技术改动
+- 如果改动包含 bug 修复，要明确修复点
+- 如果改动只是格式/依赖/构建/工具链，也要选对 type（例如 chore/build/ci/style）
+- 如果信息不足，做最合理的概括，但不要编造不存在的功能
+
+示例（只作为格式参考，不要照抄）：
+fix(terminal): ensure unique session id to prevent duplicated prompt
+
+- use uuid v4 for terminal sessions
+- debounce resize events to reduce prompt redraw`;
 
       const user = `项目路径：${rootPath}\n当前分支：${currentBranch || '(unknown)'}\n\n改动文件总数：${uniquePaths.length}${truncated ? '（diff 已截断/压缩）' : ''}\n\nStaged files（将被提交）:\n${stagedList || '(none)'}\n\nUnstaged files（未暂存，但可能也相关）:\n${unstagedList || '(none)'}\n\nDiff（摘要/截断，按文件分组）：\n${buf}`;
 
@@ -410,7 +447,7 @@ export default function GitPanel({
             { role: 'system', content: system },
             { role: 'user', content: user },
           ],
-          temperature: 0.3,
+          temperature: 0.2,
           max_tokens: 320,
           stream: false,
         },
@@ -418,7 +455,60 @@ export default function GitPanel({
 
       const text =
         resp?.choices?.[0]?.message?.content != null ? String(resp.choices[0].message.content) : '';
-      const next = text.trim();
+
+      const cleaned = String(text || '')
+        .replace(/```[a-zA-Z]*\n?/g, '')
+        .replace(/```/g, '')
+        .replace(/\r\n/g, '\n')
+        .trim();
+
+      const lines = cleaned
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+
+      const headerRe = /^(feat|fix|refactor|perf|docs|test|chore|build|ci|style|revert)(\([^)]+\))?(!)?:\s+.+/i;
+      const templateGarbageRe = /^(scope\s*:|<subject>|<scope>|<type>|<.*?>)$/i;
+
+      let headerLine = lines.find((l) => headerRe.test(l)) ?? '';
+      if (!headerLine) {
+        // Try to salvage: sometimes model outputs template blocks or headings first.
+        headerLine = lines.find((l) => !templateGarbageRe.test(l) && /:/.test(l)) ?? '';
+      }
+
+      // Remove common template prefixes like "feat(feature)" / "scope: xxx" lines.
+      headerLine = headerLine
+        .replace(/^\s*(type\s*:|scope\s*:|subject\s*:)/i, '')
+        .trim();
+
+      // If still not valid, hard-fail so user sees the error instead of a broken message.
+      if (!headerLine || !headerRe.test(headerLine)) {
+        setCommitAiError('AI 返回的 commit message 不符合 Conventional Commits header 格式');
+        return;
+      }
+
+      const bodyLines: string[] = [];
+      let inBody = false;
+      for (const l of lines) {
+        if (!inBody) {
+          if (l === headerLine) inBody = true;
+          continue;
+        }
+        if (/^breaking change\s*:/i.test(l)) {
+          bodyLines.push(l);
+          continue;
+        }
+        if (l.startsWith('- ')) {
+          bodyLines.push(l);
+          continue;
+        }
+      }
+
+      const next = [headerLine, bodyLines.length ? '' : null, bodyLines.length ? bodyLines.join('\n') : null]
+        .filter((x) => x != null)
+        .join('\n')
+        .trim();
+
       if (!next) {
         setCommitAiError('AI 未返回 commit message');
         return;
@@ -485,6 +575,15 @@ export default function GitPanel({
         <div className="text-sm font-medium text-gray-800">Git</div>
         <div className="relative" data-git-remote-menu>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="p-1 rounded hover:bg-gray-100 active:bg-gray-200 disabled:opacity-50"
+              onClick={() => void refresh()}
+              disabled={loading || actionBusy}
+              title="Refresh"
+            >
+              <RefreshCw className={(loading ? 'animate-spin ' : '') + 'w-4 h-4 text-gray-600'} />
+            </button>
             <div className="text-[11px] text-gray-500">Remote</div>
             <div className="text-[11px] text-gray-800 font-mono max-w-[160px] truncate" title={matchedRemote?.name || '—'}>
               {matchedRemote?.name || '—'}

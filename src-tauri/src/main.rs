@@ -64,6 +64,7 @@ use db::{
 };
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 use zip::ZipArchive;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -263,8 +264,7 @@ async fn terminal_start(
     window: Window,
     sessions: State<'_, TerminalSessionMap>,
 ) -> Result<String, String> {
-    let ts = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_millis();
-    let session_id = format!("term_{}", ts);
+    let session_id = format!("term_{}", Uuid::new_v4());
 
     let system = native_pty_system();
     let pair = system
