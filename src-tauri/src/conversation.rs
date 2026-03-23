@@ -9,6 +9,12 @@ use futures_util::StreamExt;
 
 use crate::ai::{AiConfig, AiError, ChatMessage, ChatRequest, ChatResponse, ChatStreamChunk, create_ai_client};
 
+fn estimate_tokens_from_text(s: &str) -> u32 {
+    // Very rough heuristic: ~4 chars per token for mixed English/Chinese.
+    let chars = s.chars().count() as u32;
+    std::cmp::max(1, chars / 4)
+}
+
 /// 会话消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationMessage {
@@ -93,8 +99,10 @@ impl Conversation {
         self.messages.push(message);
         
         // 维护消息数量限制
-        if self.messages.len() > self.config.max_messages {
-            self.messages.remove(0);
+        if !self.config.auto_summarize {
+            if self.messages.len() > self.config.max_messages {
+                self.messages.remove(0);
+            }
         }
     }
 
@@ -108,6 +116,16 @@ impl Conversation {
                 role: "system".to_string(),
                 content: system_prompt.clone(),
             });
+        }
+
+        // Add rolling summary as system context (if present).
+        if let Some(summary) = &self.summary {
+            if !summary.trim().is_empty() {
+                messages.push(ChatMessage {
+                    role: "system".to_string(),
+                    content: format!("Rolling summary (auto-generated):\n{}", summary),
+                });
+            }
         }
         
         // 添加记忆窗口内的消息
@@ -267,8 +285,135 @@ impl ConversationManager {
         };
         
         conversation.add_message(assistant_message);
+
+        // Best-effort auto summarization after assistant reply.
+        let auto_sum = conversation.config.auto_summarize;
+        let conv_id = conversation.id.clone();
+        drop(conversations);
+        if auto_sum {
+            let _ = self.maybe_auto_summarize(&conv_id).await;
+        }
         
         Ok(response)
+    }
+
+    async fn maybe_auto_summarize(&self, conversation_id: &str) -> Result<(), String> {
+        // Phase 1: check + snapshot under lock
+        let (ai_config, model, max_tokens, memory_window, existing_summary, snapshot_msgs) = {
+            let mut conversations = self.conversations.write().await;
+            let conversation = conversations
+                .get_mut(conversation_id)
+                .ok_or("会话不存在")?;
+
+            if !conversation.config.auto_summarize {
+                return Ok(());
+            }
+
+            let msg_count = conversation.messages.len();
+            let max_messages = conversation.config.max_messages;
+            let max_tokens = conversation.config.max_tokens;
+            let memory_window = conversation.config.memory_window;
+
+            let mut est_tokens: u32 = 0;
+            for m in &conversation.messages {
+                if let Some(meta) = &m.metadata {
+                    if let Some(t) = meta.tokens_used {
+                        est_tokens = est_tokens.saturating_add(t);
+                        continue;
+                    }
+                }
+                est_tokens = est_tokens.saturating_add(estimate_tokens_from_text(&m.content));
+            }
+
+            let token_threshold = ((max_tokens as f32) * 0.8) as u32;
+            let needs = msg_count > max_messages || est_tokens > token_threshold;
+            if !needs {
+                return Ok(());
+            }
+
+            if msg_count <= memory_window + 2 {
+                return Ok(());
+            }
+
+            let summarize_upto = msg_count.saturating_sub(memory_window);
+            if summarize_upto == 0 {
+                return Ok(());
+            }
+
+            let to_sum = conversation.messages[..summarize_upto].to_vec();
+            (
+                conversation.ai_config.clone(),
+                conversation.ai_config.model.clone(),
+                max_tokens,
+                memory_window,
+                conversation.summary.clone().unwrap_or_default(),
+                to_sum,
+            )
+        };
+
+        // Phase 2: summarize without lock
+        let mut transcript = String::new();
+        for m in &snapshot_msgs {
+            transcript.push_str(&format!("[{}] {}\n\n", m.role, m.content));
+        }
+
+        let prompt = format!(
+            "你是 GoPilot 的滚动摘要器。请把以下对话片段摘要成一个可持续累积的 summary，用于在后续对话中替代原文。\n\n\
+要求：\n\
+- 保留用户目标、关键决策、重要文件/函数名、未完成事项、已完成事项、已知问题\n\
+- 使用分段标题，尽量结构化\n\
+- 不要编造不存在的信息\n\n\
+现有 summary（可能为空）：\n\
+---\n\
+{}\n\
+---\n\n\
+需要摘要的新内容：\n\
+---\n\
+{}\n\
+---\n",
+            existing_summary,
+            transcript
+        );
+
+        let request = ChatRequest {
+            model: model.clone(),
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: prompt,
+            }],
+            temperature: Some(0.2),
+            max_tokens: Some(std::cmp::min(1200, max_tokens)),
+            stream: Some(false),
+        };
+
+        let client = create_ai_client(ai_config);
+        let response = client
+            .chat(request)
+            .await
+            .map_err(|e| format!("摘要 AI 调用失败: {}", e))?;
+        let new_summary = response.choices[0].message.content.clone();
+
+        // Phase 3: apply under lock (re-check size + trim)
+        let mut conversations = self.conversations.write().await;
+        let conversation = conversations
+            .get_mut(conversation_id)
+            .ok_or("会话不存在")?;
+
+        // Only apply if auto summarization still enabled.
+        if !conversation.config.auto_summarize {
+            return Ok(());
+        }
+
+        conversation.summary = Some(new_summary);
+
+        // Trim: keep only the last memory_window messages.
+        let keep = conversation.config.memory_window;
+        if conversation.messages.len() > keep {
+            let start = conversation.messages.len() - keep;
+            conversation.messages = conversation.messages[start..].to_vec();
+        }
+
+        Ok(())
     }
 
     /// 流式发送消息
@@ -394,6 +539,10 @@ impl ConversationManager {
 
             conversation.add_message(assistant_message);
         }
+
+        // Best-effort auto summarization after assistant reply.
+        // Run outside the lock.
+        let _ = self.maybe_auto_summarize(conversation_id).await;
 
         let _ = window.emit(
             "conversation-chat-end",

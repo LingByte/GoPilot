@@ -5,11 +5,13 @@ use tauri::{Manager, State, Window};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Command, Stdio, Child};
 use std::io::{BufRead, BufReader};
 use std::cmp::min;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use futures_util::StreamExt;
 use tokio::io::AsyncWriteExt;
 use std::thread;
@@ -408,15 +410,106 @@ async fn read_file(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn read_file_range_scoped(
+    root_path: String,
+    path: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<String, String> {
+    let resolved = resolve_scoped_path(&root_path, &path)?;
+    let file = std::fs::File::open(&resolved).map_err(|e| e.to_string())?;
+    let reader = BufReader::new(file);
+
+    // Offset is 1-indexed line number, consistent with typical UI expectations.
+    let start = offset.unwrap_or(1);
+    let max = limit.unwrap_or(400);
+    if start == 0 {
+        return Err("offset must be >= 1".to_string());
+    }
+    if max == 0 {
+        return Ok(String::new());
+    }
+
+    let mut out = String::new();
+    let mut line_no: usize = 0;
+    let mut taken: usize = 0;
+    for line in reader.lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        line_no += 1;
+        if line_no < start {
+            continue;
+        }
+        out.push_str(&line);
+        out.push('\n');
+        taken += 1;
+        if taken >= max {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+#[tauri::command]
 async fn read_binary_file(path: String) -> Result<String, String> {
     use base64::{Engine as _, engine::general_purpose};
     let bytes = fs::read(&path).map_err(|e| e.to_string())?;
     Ok(general_purpose::STANDARD.encode(&bytes))
 }
 
+fn normalize_path(input: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in input.components() {
+        use std::path::Component;
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+fn resolve_scoped_path(root_path: &str, input_path: &str) -> Result<PathBuf, String> {
+    let root = PathBuf::from(root_path);
+    if root_path.trim().is_empty() {
+        return Err("rootPath is required".to_string());
+    }
+
+    // Canonicalize root so prefix checks are reliable.
+    let root_canon = root
+        .canonicalize()
+        .map_err(|e| format!("invalid rootPath: {}", e))?;
+
+    let raw = PathBuf::from(input_path);
+    let joined = if raw.is_absolute() { raw } else { root_canon.join(raw) };
+    let normalized = normalize_path(&joined);
+
+    if !normalized.starts_with(&root_canon) {
+        return Err("path is outside project root".to_string());
+    }
+    Ok(normalized)
+}
+
 #[tauri::command]
 async fn write_file(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn write_file_scoped(root_path: String, path: String, content: String) -> Result<(), String> {
+    // 5MB limit to avoid accidental huge writes from AI.
+    const MAX_BYTES: usize = 5 * 1024 * 1024;
+    if content.as_bytes().len() > MAX_BYTES {
+        return Err("content too large".to_string());
+    }
+
+    let resolved = resolve_scoped_path(&root_path, &path)?;
+    if let Some(parent) = resolved.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(&resolved, content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1334,7 +1427,7 @@ async fn git_branch_graph(path: String) -> Result<serde_json::Value, String> {
 async fn execute_command_stream(
     command: String,
     working_dir: Option<String>,
-    process_id: String,
+    processId: String,
     window: Window,
     processes: State<'_, ProcessMap>,
 ) -> Result<(), String> {
@@ -1381,18 +1474,18 @@ async fn execute_command_stream(
     };
     
     let _pid = child.id();
-    processes.lock().unwrap().insert(process_id.clone(), child);
+    processes.lock().unwrap().insert(processId.clone(), child);
     
-    let stdout = processes.lock().unwrap().get_mut(&process_id)
+    let stdout = processes.lock().unwrap().get_mut(&processId)
         .and_then(|c| c.stdout.take())
         .ok_or("Failed to get stdout".to_string())?;
     
-    let stderr = processes.lock().unwrap().get_mut(&process_id)
+    let stderr = processes.lock().unwrap().get_mut(&processId)
         .and_then(|c| c.stderr.take())
         .ok_or("Failed to get stderr".to_string())?;
     
     let window_clone = window.clone();
-    let _process_id_clone = process_id.clone();
+    let process_id_clone = processId.clone();
     // 不需要 clone 整个 processes，在需要时获取锁
     
     thread::spawn(move || {
@@ -1400,6 +1493,7 @@ async fn execute_command_stream(
         for line in reader.lines() {
             if let Ok(line) = line {
                 window_clone.emit("command-output", serde_json::json!({
+                    "process_id": process_id_clone,
                     "line": line,
                     "is_error": false,
                 })).ok();
@@ -1408,7 +1502,7 @@ async fn execute_command_stream(
     });
     
     let window_clone2 = window.clone();
-    let _process_id_clone2 = process_id.clone();
+    let process_id_clone2 = processId.clone();
     // 不需要 clone 整个 processes，在需要时获取锁
     
     thread::spawn(move || {
@@ -1416,14 +1510,64 @@ async fn execute_command_stream(
         for line in reader.lines() {
             if let Ok(line) = line {
                 window_clone2.emit("command-output", serde_json::json!({
+                    "process_id": process_id_clone2,
                     "line": line,
                     "is_error": true,
                 })).ok();
             }
         }
         
-        // 等待进程结束 - 这个逻辑需要重新设计，因为不能跨线程传递 MutexGuard
-        // 暂时注释掉，后续可以重新实现进程结束检测
+        // stderr thread ends when pipe closes.
+    });
+
+    // Poll process status and emit end event.
+    let window_end = window.clone();
+    let process_end_id = processId.clone();
+    let processes_end = processes.inner().clone();
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_millis(120));
+            let mut map = processes_end.lock().unwrap();
+            let done = if let Some(child) = map.get_mut(&process_end_id) {
+                match child.try_wait() {
+                    Ok(Some(status)) => Some(status),
+                    Ok(None) => None,
+                    Err(_) => {
+                        // Unknown status; treat as failure.
+                        map.remove(&process_end_id);
+                        drop(map);
+                        window_end
+                            .emit(
+                                "command-end",
+                                serde_json::json!({
+                                    "process_id": process_end_id,
+                                    "exit_code": -1,
+                                }),
+                            )
+                            .ok();
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+
+            if let Some(status) = done {
+                let code = status.code().unwrap_or(-1);
+                map.remove(&process_end_id);
+                drop(map);
+                window_end
+                    .emit(
+                        "command-end",
+                        serde_json::json!({
+                            "process_id": process_end_id,
+                            "exit_code": code,
+                        }),
+                    )
+                    .ok();
+                break;
+            }
+        }
     });
     
     Ok(())
@@ -1431,10 +1575,10 @@ async fn execute_command_stream(
 
 #[tauri::command]
 async fn kill_command(
-    process_id: String,
+    processId: String,
     processes: State<'_, ProcessMap>,
 ) -> Result<(), String> {
-    if let Some(mut child) = processes.lock().unwrap().remove(&process_id) {
+    if let Some(mut child) = processes.lock().unwrap().remove(&processId) {
         #[cfg(unix)]
         {
             use libc::{kill, SIGTERM};
@@ -1813,8 +1957,10 @@ fn main() {
             set_theme,
             get_theme,
             read_file,
+            read_file_range_scoped,
             read_binary_file,
             write_file,
+            write_file_scoped,
             append_file,
             read_directory,
             fetch_url_base64,
@@ -1827,6 +1973,7 @@ fn main() {
             terminal_kill,
             execute_command,
             execute_command_stream,
+            kill_command,
             is_git_repository,
             git_current_branch,
             git_status,

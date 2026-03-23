@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Sparkles, Code, FileText, CheckCircle, AlertTriangle, Settings, Plus, Clock, ArrowLeft, X } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/tauri';
+import { listen } from '@tauri-apps/api/event';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -12,14 +13,141 @@ type FileRef = {
   displayPath: string;
 };
 
+function flattenDirectoryTree(nodes: any[], rootPath: string) {
+  const out: Array<{ path: string; displayPath: string }> = [];
+  const excludedDirNames = new Set([
+    'node_modules',
+    'target',
+    'dist',
+    'build',
+    '.git',
+    '.next',
+    '.turbo',
+    '.cache',
+    '.idea',
+    '.vscode',
+  ]);
+
+  const walk = (xs: any[]) => {
+    for (const n of xs ?? []) {
+      const p = typeof n?.path === 'string' ? n.path : '';
+      const t = typeof n?.type === 'string' ? n.type : (typeof n?.entry_type === 'string' ? n.entry_type : '');
+      const isDir = t === 'directory' || Array.isArray(n?.children);
+      if (isDir) {
+        const name = typeof n?.name === 'string' && n.name ? String(n.name) : (p ? String(p).split(/[\\/]/).filter(Boolean).slice(-1)[0] : '');
+        if (name && excludedDirNames.has(name)) {
+          continue;
+        }
+        if (Array.isArray(n?.children)) walk(n.children);
+        continue;
+      }
+      if (!p) continue;
+      const rel = p.startsWith(rootPath) ? p.slice(rootPath.length).replace(/^\//, '') : p;
+      out.push({ path: p, displayPath: rel || p });
+    }
+  };
+
+  walk(nodes);
+  out.sort((a, b) => a.displayPath.localeCompare(b.displayPath));
+  return out;
+}
+
+function escapeRegExp(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function globToRegExp(glob: string) {
+  // Minimal glob support: *, **, ?
+  // - '*' matches any chars except '/'
+  // - '**' matches any chars including '/'
+  // - '?' matches one char except '/'
+  const g = String(glob ?? '').trim();
+  if (!g) return null;
+  const parts: string[] = [];
+  let i = 0;
+  while (i < g.length) {
+    const ch = g[i];
+    if (ch === '*') {
+      const next = g[i + 1];
+      if (next === '*') {
+        parts.push('[\\s\\S]*');
+        i += 2;
+        continue;
+      }
+      parts.push('[^/]*');
+      i += 1;
+      continue;
+    }
+    if (ch === '?') {
+      parts.push('[^/]');
+      i += 1;
+      continue;
+    }
+    parts.push(escapeRegExp(ch));
+    i += 1;
+  }
+  return new RegExp('^' + parts.join('') + '$', 'i');
+}
+
+function matchAnyGlob(path: string, globs: string[] | undefined) {
+  const p = String(path ?? '');
+  if (!globs || !globs.length) return false;
+  for (const g of globs) {
+    const re = globToRegExp(g);
+    if (re && re.test(p)) return true;
+  }
+  return false;
+}
+
+function filterPathsByGlob(
+  paths: Array<{ path: string; displayPath: string }>,
+  opts: { includeGlobs?: string[]; excludeGlobs?: string[] },
+) {
+  const include = Array.isArray(opts.includeGlobs) ? opts.includeGlobs.filter(Boolean) : [];
+  const exclude = Array.isArray(opts.excludeGlobs) ? opts.excludeGlobs.filter(Boolean) : [];
+  return paths.filter((it) => {
+    const rel = it.displayPath;
+    if (exclude.length && matchAnyGlob(rel, exclude)) return false;
+    if (include.length) return matchAnyGlob(rel, include);
+    return true;
+  });
+}
+
 type AiEditItem = {
   path: string;
   newText: string;
 };
 
-type AiEditPayload = {
-  edits: AiEditItem[];
+type AiToolCall = {
+  id?: string;
+  tool: 'read_file' | 'search_workspace' | 'write_file' | 'execute_command' | 'scan_project';
+  args?: any;
 };
+
+type AiActionPayload = {
+  edits?: AiEditItem[];
+  tool_calls?: AiToolCall[];
+};
+
+function detectDocsSaveIntent(text: string) {
+  const s = String(text ?? '');
+  if (!s) return { wantsSave: false, docPath: '' };
+  const m = s.match(/docs\/[A-Za-z0-9_./-]+\.md/i);
+  const docPath = m?.[0] ? String(m[0]) : '';
+  const wantsSave = /保存到|保存为|写入\s*docs\//.test(s) || (!!docPath && /保存|写入|生成/.test(s));
+  return { wantsSave, docPath };
+}
+
+function detectScanProjectIntent(text: string) {
+  const s = String(text ?? '');
+  if (!s.trim()) return { wantsScan: false, targetDoc: '' };
+  const wantsScan = /扫描(整个|全部)?项目|scan\s+(the\s+)?project|scan\s+all\s+files|扫描全部文件/i.test(s);
+  if (!wantsScan) return { wantsScan: false, targetDoc: '' };
+  const m = s.match(/docs\/[A-Za-z0-9_./-]+\.md/i);
+  if (m?.[0]) return { wantsScan: true, targetDoc: String(m[0]) };
+  if (/summaryall\.md/i.test(s)) return { wantsScan: true, targetDoc: 'docs/summaryall.md' };
+  return { wantsScan: true, targetDoc: 'docs/summaryall.md' };
+}
 
 function isAbsolutePath(p: string) {
   return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('\\\\') || p.startsWith('/');
@@ -31,6 +159,28 @@ function joinPath(parent: string, child: string) {
   const p = parent.endsWith('\\') || parent.endsWith('/') ? parent.slice(0, -1) : parent;
   const c = child.startsWith('\\') || child.startsWith('/') ? child.slice(1) : child;
   return p + sep + c;
+}
+
+function normalizeRelativePath(p: string) {
+  const s = String(p ?? '').trim();
+  if (!s) return '';
+  // Treat leading '/' as a mistake from the model and coerce to project-relative.
+  const noLeading = s.startsWith('/') ? s.slice(1) : s;
+  // Remove './'
+  const noDot = noLeading.startsWith('./') ? noLeading.slice(2) : noLeading;
+  return noDot;
+}
+
+function safeResolveScopePath(rootPath: string, scopePath: string) {
+  const s = normalizeRelativePath(scopePath);
+  if (!s) return rootPath;
+  if (s.includes('..')) return rootPath;
+  return joinPath(rootPath, s);
+}
+
+function isDocsPath(p: string) {
+  const s = normalizeRelativePath(p).toLowerCase();
+  return s === 'docs' || s.startsWith('docs/');
 }
 
 function extractFirstJsonObject(raw: string): string {
@@ -48,21 +198,72 @@ function extractFirstJsonObject(raw: string): string {
   if (first >= 0 && last > first) {
     return s.slice(first, last + 1).trim();
   }
+
+  // Allow users/models to paste a JSON fragment like: "edit_path": "...", "content": "..."
+  if (s.includes('"edit_path"') || s.includes('"editPath"')) {
+    return `{${s.replace(/^,+|,+$/g, '').trim()}}`;
+  }
   return '';
 }
 
-function tryParseEditsFromAssistant(content: string): AiEditPayload | null {
+function stripFirstJsonObject(raw: string): string {
+  const s = String(raw ?? '');
+  if (!s.trim()) return s;
+
+  const jsonFenceMatch = s.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (jsonFenceMatch?.[0]) {
+    return s.replace(jsonFenceMatch[0], '').trim();
+  }
+
+  const first = s.indexOf('{');
+  const last = s.lastIndexOf('}');
+  if (first >= 0 && last > first) {
+    return (s.slice(0, first) + s.slice(last + 1)).trim();
+  }
+  return s.trim();
+}
+
+function tryParseActionsFromAssistant(content: string): AiActionPayload | null {
   const candidate = extractFirstJsonObject(content);
   if (!candidate) return null;
   try {
     const parsed = JSON.parse(candidate) as any;
     if (!parsed || typeof parsed !== 'object') return null;
-    if (!Array.isArray(parsed.edits)) return null;
-    const edits: AiEditItem[] = parsed.edits
-      .filter((e: any) => e && typeof e.path === 'string' && typeof e.newText === 'string')
-      .map((e: any) => ({ path: String(e.path), newText: String(e.newText) }));
-    if (edits.length === 0) return null;
-    return { edits };
+
+    // Back-compat: accept legacy single-edit shape.
+    const legacyPath =
+      typeof parsed.edit_path === 'string'
+        ? parsed.edit_path
+        : typeof parsed.editPath === 'string'
+          ? parsed.editPath
+          : '';
+    const legacyContent = typeof parsed.content === 'string' ? parsed.content : '';
+    if (legacyPath && legacyContent) {
+      return {
+        edits: [{ path: legacyPath, newText: legacyContent }],
+        tool_calls: [],
+      };
+    }
+
+    const edits: AiEditItem[] = Array.isArray(parsed.edits)
+      ? parsed.edits
+          .filter((e: any) => e && typeof e.path === 'string' && typeof e.newText === 'string')
+          .map((e: any) => ({ path: String(e.path), newText: String(e.newText) }))
+      : [];
+
+    const toolCalls: AiToolCall[] = Array.isArray(parsed.tool_calls)
+      ? parsed.tool_calls
+          .filter((c: any) => c && typeof c.tool === 'string')
+          .map((c: any) => ({
+            id: typeof c.id === 'string' ? c.id : undefined,
+            tool: String(c.tool),
+            args: c.args,
+          }))
+          .filter((c: any) => c.tool)
+      : [];
+
+    if (edits.length === 0 && toolCalls.length === 0) return null;
+    return { edits: edits.length ? edits : undefined, tool_calls: toolCalls.length ? toolCalls : undefined };
   } catch {
     return null;
   }
@@ -92,6 +293,20 @@ const AIPanelInner: React.FC<{ rootPath?: string }> = ({ rootPath }) => {
   const fileIndexLoadedRef = useRef<string>('');
 
   const [appliedByMsgId, setAppliedByMsgId] = useState<Record<string, Record<string, boolean>>>({});
+
+  const [pendingCommandsByMsgId, setPendingCommandsByMsgId] = useState<
+    Record<string, Array<{ id: string; command: string; cwd?: string; status: 'pending' | 'running' | 'done' | 'error'; output?: string }>>
+  >({});
+
+  const pendingCommandMetaRef = useRef<
+    Map<string, { msgId: string; cmdId: string; command: string; startedAt: number }>
+  >(new Map());
+
+  const commandOutputBufRef = useRef<Map<string, string>>(new Map());
+
+  const promptedForActionsRef = useRef<Set<string>>(new Set());
+
+  const executedToolCallIdsRef = useRef<Set<string>>(new Set());
 
   const { 
     createConversation,
@@ -170,6 +385,16 @@ const AIPanelInner: React.FC<{ rootPath?: string }> = ({ rootPath }) => {
     if (!q) return filePickerItems;
     return filePickerItems.filter((it) => it.displayPath.toLowerCase().includes(q));
   }, [filePickerItems, filePickerQuery]);
+
+  const resolveEditPath = useMemo(() => {
+    return (p: string) => {
+      const raw = String(p ?? '').trim();
+      if (!raw) return '';
+      if (isAbsolutePath(raw)) return raw;
+      if (!rootPath) return raw;
+      return joinPath(rootPath, raw);
+    };
+  }, [rootPath]);
 
   const loadProjectFilesFromIndex = useCallback(async () => {
     if (!rootPath) return false;
@@ -275,34 +500,338 @@ const AIPanelInner: React.FC<{ rootPath?: string }> = ({ rootPath }) => {
     return (
       'You are editing a codebase. The user referenced these files. Use them as context.\n' +
       'Always reply in normal human language first (explain what you will change and why).\n' +
-      'If you propose changes to files, append a single JSON object at the END of your response inside a ```json code block with schema: {"edits": [{"path": string, "newText": string}]}.\n' +
-      'Each newText must be the full updated file content. Paths should be relative to the project root when possible.\n' +
-      'Do not output multiple edits blocks; output at most one JSON code block.\n\n' +
+      'You DO have tools to inspect the local repository. Do NOT ask the user to paste `tree` output.\n' +
+      'Tools available:\n' +
+      '- scan_project: list files in a scope and stream batches of file excerpts (use this to scan the whole project).\n' +
+      '- search_workspace: grep-like search; when query is "*" it lists files in a scope.\n' +
+      '- read_file: read a file; can use offset/limit for large files via args.offset/args.limit.\n' +
+      '- write_file / edits: write docs under docs/**.\n' +
+      '- execute_command: propose a shell command (requires user confirmation).\n' +
+      'If you want to perform actions, append a single JSON object at the END of your response inside a ```json code block with schema:\n' +
+      '{"edits": [{"path": string, "newText": string}], "tool_calls": [{"id": string, "tool": "read_file"|"search_workspace"|"write_file"|"execute_command"|"scan_project", "args": object}]}.\n' +
+      '- "edits" are full-file rewrites (newText is the entire file content).\n' +
+      '- "write_file" tool writes a file at args.path with args.content. Prefer writing docs to docs/*.md.\n' +
+      '- "execute_command" proposes a shell command; it will require explicit user confirmation before running.\n' +
+      'IMPORTANT: If the user asks you to "write a summary doc" / "generate documentation" / "save to docs/*.md", you MUST include the JSON edits/write_file that actually writes the docs file. Do NOT claim you saved a file unless you included the JSON block that writes it.\n' +
+      'Paths should be relative to the project root when possible.\n' +
+      'Do not output multiple JSON blocks; output at most one JSON code block.\n\n' +
       blocks.join('\n\n') +
       '\n\n--- USER MESSAGE ---\n' +
       base
     );
   };
 
-  const resolveEditPath = useMemo(() => {
-    return (p: string) => {
-      const raw = String(p ?? '').trim();
-      if (!raw) return '';
-      if (isAbsolutePath(raw)) return raw;
-      if (!rootPath) return raw;
-      return joinPath(rootPath, raw);
-    };
-  }, [rootPath]);
+  const sendToolResult = useCallback(
+    async (summary: string, result: any) => {
+      const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+      const content = `TOOL RESULT\n${summary}\n\n${text}`;
+      await sendMessage(content, { displayContent: summary });
+    },
+    [sendMessage],
+  );
 
-  const applyEdit = async (msgId: string, edit: AiEditItem) => {
-    const abs = resolveEditPath(edit.path);
-    if (!abs) return;
-    await invoke('write_file', { path: abs, content: edit.newText });
-    setAppliedByMsgId((prev) => {
-      const byEdit = prev[msgId] ?? {};
-      return { ...prev, [msgId]: { ...byEdit, [edit.path]: true } };
+  const applyEdit = useCallback(
+    async (msgId: string, edit: AiEditItem) => {
+      const rel = normalizeRelativePath(edit.path);
+      if (!isDocsPath(rel)) {
+        // Safety: only allow auto-writes into docs/**.
+        await sendToolResult(`write blocked: ${edit.path}`, 'Only docs/** is allowed for auto-write.');
+        return;
+      }
+
+      const abs = resolveEditPath(rel);
+      if (!abs) return;
+      if (!rootPath) return;
+      await invoke('write_file_scoped', { rootPath, path: rel, content: edit.newText });
+      setAppliedByMsgId((prev) => {
+        const byEdit = prev[msgId] ?? {};
+        return { ...prev, [msgId]: { ...byEdit, [edit.path]: true } };
+      });
+    },
+    [resolveEditPath, rootPath, sendToolResult],
+  );
+
+  const ensurePendingCommand = useCallback((msgId: string, cmd: { id: string; command: string; cwd?: string }) => {
+    setPendingCommandsByMsgId((prev) => {
+      const list = prev[msgId] ?? [];
+      if (list.some((x) => x.id === cmd.id)) return prev;
+      return {
+        ...prev,
+        [msgId]: [...list, { ...cmd, status: 'pending' }],
+      };
     });
-  };
+  }, []);
+
+  const executeToolCalls = useCallback(
+    async (msgId: string, toolCalls: AiToolCall[], edits?: AiEditItem[]) => {
+      if (!rootPath) return;
+
+      // Auto-apply edits (auto write) once.
+      if (Array.isArray(edits) && edits.length) {
+        const applied = appliedByMsgId[msgId] ?? {};
+        for (const e of edits) {
+          if (applied[e.path]) continue;
+          // Only apply once per path per message.
+          void applyEdit(msgId, e);
+        }
+      }
+
+      for (const call of toolCalls) {
+        const callId = call.id || `${msgId}_${call.tool}_${JSON.stringify(call.args ?? {})}`;
+        if (executedToolCallIdsRef.current.has(callId)) continue;
+        executedToolCallIdsRef.current.add(callId);
+
+        try {
+          if (call.tool === 'read_file') {
+            const p = normalizeRelativePath(String(call.args?.path ?? ''));
+            if (!p) continue;
+            const offset = call.args?.offset != null ? Number(call.args.offset) : undefined;
+            const limit = call.args?.limit != null ? Number(call.args.limit) : undefined;
+            if (offset != null || limit != null) {
+              const out = await invoke<string>('read_file_range_scoped', {
+                rootPath,
+                path: p,
+                offset: offset != null && !Number.isNaN(offset) ? offset : undefined,
+                limit: limit != null && !Number.isNaN(limit) ? limit : undefined,
+              });
+              const suffix = ` (offset=${offset ?? 1}, limit=${limit ?? 400})`;
+              await sendToolResult(`read_file: ${p}${suffix}`, String(out ?? ''));
+            } else {
+              const abs = resolveEditPath(p);
+              if (!abs) continue;
+              const out = await invoke<string>('read_file', { path: abs });
+              await sendToolResult(`read_file: ${p}`, String(out ?? ''));
+            }
+            continue;
+          }
+
+          if (call.tool === 'search_workspace') {
+            const q = String(call.args?.query ?? '').trim();
+            const maxResults = call.args?.max_results != null ? Number(call.args.max_results) : 200;
+            const scopePathArg = typeof call.args?.path === 'string' ? String(call.args.path).trim() : '';
+            const includeGlobs = Array.isArray(call.args?.include_globs) ? call.args.include_globs.map((x: any) => String(x)) : undefined;
+            const excludeGlobs = Array.isArray(call.args?.exclude_globs) ? call.args.exclude_globs.map((x: any) => String(x)) : undefined;
+            if (!q) continue;
+            if (q === '*' || q === 'all_files') {
+              const scopeAbs = safeResolveScopePath(rootPath, scopePathArg);
+              const entries = (await invoke('read_directory_tree', { path: scopeAbs, maxDepth: 12 })) as any[];
+              const scoped = flattenDirectoryTree(entries, scopeAbs).map((it) => {
+                const abs = it.path;
+                const relToRoot = abs.startsWith(rootPath) ? abs.slice(rootPath.length).replace(/^\//, '') : it.displayPath;
+                return { path: abs, displayPath: relToRoot || it.displayPath };
+              });
+              const filtered = filterPathsByGlob(scoped, { includeGlobs, excludeGlobs });
+              await sendToolResult(
+                `list_files: ${scopePathArg || rootPath}`,
+                filtered.slice(0, Number.isFinite(maxResults) ? Math.max(1, maxResults) : 200),
+              );
+              continue;
+            }
+
+            // Note: backend search_workspace currently expects a path root; we scope it by passing the directory.
+            const scopeAbs = safeResolveScopePath(rootPath, scopePathArg);
+            const out = await invoke<any[]>('search_workspace', { path: scopeAbs, query: q, maxResults });
+            await sendToolResult(`search_workspace: ${q}`, out ?? []);
+            continue;
+          }
+
+          if (call.tool === 'scan_project') {
+            const scopePathArg = typeof call.args?.path === 'string' ? String(call.args.path).trim() : '';
+            const includeGlobs = Array.isArray(call.args?.include_globs) ? call.args.include_globs.map((x: any) => String(x)) : undefined;
+            const excludeGlobs = Array.isArray(call.args?.exclude_globs) ? call.args.exclude_globs.map((x: any) => String(x)) : undefined;
+            const batchSize = call.args?.batch_size != null ? Math.max(1, Number(call.args.batch_size)) : 10;
+            const maxFiles = call.args?.max_files != null ? Math.max(1, Number(call.args.max_files)) : 200;
+            const maxDepth = call.args?.max_depth != null ? Math.max(1, Number(call.args.max_depth)) : 12;
+            const maxLinesPerFile = call.args?.max_lines_per_file != null ? Math.max(20, Number(call.args.max_lines_per_file)) : 260;
+            const targetPathRaw = typeof call.args?.target_path === 'string' ? String(call.args.target_path).trim() : '';
+            const targetPath = isDocsPath(targetPathRaw) ? normalizeRelativePath(targetPathRaw) : 'docs/project_summary.md';
+
+            const scopeAbs = safeResolveScopePath(rootPath, scopePathArg);
+            const entries = (await invoke('read_directory_tree', { path: scopeAbs, maxDepth })) as any[];
+            const scoped = flattenDirectoryTree(entries, scopeAbs).map((it) => {
+              const abs = it.path;
+              const relToRoot = abs.startsWith(rootPath) ? abs.slice(rootPath.length).replace(/^\//, '') : it.displayPath;
+              return { path: abs, displayPath: relToRoot || it.displayPath };
+            });
+            const filtered = filterPathsByGlob(scoped, { includeGlobs, excludeGlobs }).slice(0, maxFiles);
+
+            await sendToolResult(`scan_project: discovered_files (${scopePathArg || rootPath})`, {
+              total: filtered.length,
+              scope: scopePathArg || '',
+              include_globs: includeGlobs ?? [],
+              exclude_globs: excludeGlobs ?? [],
+              target_path: targetPath,
+            });
+
+            const batches: Array<Array<{ path: string; displayPath: string }>> = [];
+            for (let i = 0; i < filtered.length; i += batchSize) {
+              batches.push(filtered.slice(i, i + batchSize));
+            }
+
+            for (let bi = 0; bi < batches.length; bi++) {
+              const batch = batches[bi] ?? [];
+              const filePayload: Array<{ path: string; excerpt: string; truncated: boolean }> = [];
+              for (const f of batch) {
+                try {
+                  const excerpt = await invoke<string>('read_file_range_scoped', {
+                    rootPath,
+                    path: f.displayPath,
+                    offset: 1,
+                    limit: maxLinesPerFile,
+                  });
+                  const ex = String(excerpt ?? '');
+                  const truncated = ex.split('\n').length >= maxLinesPerFile;
+                  filePayload.push({ path: f.displayPath, excerpt: ex, truncated });
+                } catch (e: any) {
+                  const msg = typeof e === 'string' ? e : e?.message ? String(e.message) : 'read failed';
+                  filePayload.push({ path: f.displayPath, excerpt: `FAILED TO READ: ${msg}`, truncated: false });
+                }
+              }
+
+              await sendToolResult(
+                `scan_project_batch ${bi + 1}/${batches.length} (${scopePathArg || rootPath})`,
+                {
+                  batch_index: bi + 1,
+                  batch_total: batches.length,
+                  files: filePayload,
+                  instruction:
+                    `Summarize these files and incrementally update the project documentation. Write your incremental summary into ${targetPath} using a JSON edits block (edits[{path,newText}]). You may also create additional module docs under docs/** (e.g. docs/frontend.md, docs/backend.md) but keep ${targetPath} as the main index.`,
+                },
+              );
+            }
+
+            await sendToolResult(`scan_project: done (${scopePathArg || rootPath})`, { total_files: filtered.length });
+            continue;
+          }
+
+          if (call.tool === 'write_file') {
+            const p = normalizeRelativePath(String(call.args?.path ?? ''));
+            const c = String(call.args?.content ?? '');
+            if (!p) continue;
+            if (!isDocsPath(p)) {
+              await sendToolResult(`write_file blocked: ${p}`, 'Only docs/** is allowed for auto-write.');
+              continue;
+            }
+            await invoke('write_file_scoped', { rootPath, path: p, content: c });
+            await sendToolResult(`write_file: ${p}`, 'OK');
+            continue;
+          }
+
+          if (call.tool === 'execute_command') {
+            const command = String(call.args?.command ?? '').trim();
+            const cwd = typeof call.args?.cwd === 'string' && call.args.cwd.trim() ? String(call.args.cwd) : rootPath;
+            if (!command) continue;
+            ensurePendingCommand(msgId, { id: callId, command, cwd });
+            continue;
+          }
+        } catch (e: any) {
+          const msg = typeof e === 'string' ? e : e?.message ? String(e.message) : 'Tool failed';
+          await sendToolResult(`${call.tool} failed`, msg);
+        }
+      }
+    },
+    [applyEdit, appliedByMsgId, ensurePendingCommand, resolveEditPath, rootPath, sendToolResult],
+  );
+
+  useEffect(() => {
+    let unlistenOut: null | (() => void) = null;
+    let unlistenEnd: null | (() => void) = null;
+
+    const attach = async () => {
+      unlistenOut = await listen<any>('command-output', (event) => {
+        const payload = (event as any)?.payload as any;
+        const pid = typeof payload?.process_id === 'string' ? payload.process_id : '';
+        if (!pid) return;
+        const meta = pendingCommandMetaRef.current.get(pid);
+        if (!meta) return;
+        const line = typeof payload?.line === 'string' ? payload.line : String(payload?.line ?? '');
+        const isErr = !!payload?.is_error;
+
+        const prev = commandOutputBufRef.current.get(pid) || '';
+        const next = prev + (line ? (line + '\n') : '') + (isErr ? '' : '');
+        commandOutputBufRef.current.set(pid, next);
+
+        setPendingCommandsByMsgId((p) => {
+          const list = p[meta.msgId] ?? [];
+          return {
+            ...p,
+            [meta.msgId]: list.map((x) => (x.id === meta.cmdId ? { ...x, output: next } : x)),
+          };
+        });
+      });
+
+      unlistenEnd = await listen<any>('command-end', (event) => {
+        const payload = (event as any)?.payload as any;
+        const pid = typeof payload?.process_id === 'string' ? payload.process_id : '';
+        if (!pid) return;
+        const meta = pendingCommandMetaRef.current.get(pid);
+        if (!meta) return;
+
+        const exitCode = typeof payload?.exit_code === 'number' ? payload.exit_code : Number(payload?.exit_code ?? -1);
+        const out = commandOutputBufRef.current.get(pid) || '';
+        pendingCommandMetaRef.current.delete(pid);
+        commandOutputBufRef.current.delete(pid);
+
+        setPendingCommandsByMsgId((p) => {
+          const list = p[meta.msgId] ?? [];
+          return {
+            ...p,
+            [meta.msgId]: list.map((x) =>
+              x.id === meta.cmdId
+                ? { ...x, status: exitCode === 0 ? 'done' : 'error', output: out || `exit ${exitCode}` }
+                : x,
+            ),
+          };
+        });
+
+        void sendToolResult(`execute_command: ${meta.command} (exit=${exitCode})`, out || `exit ${exitCode}`);
+      });
+    };
+
+    void attach();
+    return () => {
+      try {
+        unlistenOut?.();
+        unlistenEnd?.();
+      } catch {
+        // ignore
+      }
+    };
+  }, [sendToolResult]);
+
+  useEffect(() => {
+    const conv = currentConversation;
+    if (!conv) return;
+    for (const m of conv.messages) {
+      if (m.role !== 'assistant') continue;
+      const payload = tryParseActionsFromAssistant(String(m.content ?? ''));
+      if (!payload) {
+        const { wantsSave, docPath } = detectDocsSaveIntent(String(m.content ?? ''));
+        if (!wantsSave) continue;
+        if (promptedForActionsRef.current.has(m.id)) continue;
+        promptedForActionsRef.current.add(m.id);
+        const target = docPath || 'docs/summary.md';
+        void sendMessage(
+          `You said you will save a markdown doc but you did not include executable actions. Please do ONE of the following:
+1) Call tool scan_project to scan the repository (exclude node_modules/target/dist/.git/.pilot), OR
+2) Output exactly ONE \`\`\`json block at the end with schema {"edits": [{"path": "${target}", "newText": "..."}], "tool_calls": []}.
+
+Rules:
+- Use path/newText fields (NOT edit_path/content).
+- Write only under docs/**.
+- Do not truncate the JSON.
+`,
+          { displayContent: `Please provide JSON edits to write ${target}` },
+        );
+        continue;
+      }
+      const toolCalls = Array.isArray(payload.tool_calls) ? payload.tool_calls : [];
+      const edits = Array.isArray(payload.edits) ? payload.edits : undefined;
+      if (toolCalls.length || (edits && edits.length)) {
+        void executeToolCalls(m.id, toolCalls, edits);
+      }
+    }
+  }, [currentConversation, executeToolCalls]);
 
   const buildDisplayContentWithRefs = (raw: string) => {
     const base = raw.trim();
@@ -319,23 +848,79 @@ const AIPanelInner: React.FC<{ rootPath?: string }> = ({ rootPath }) => {
     setInput(''); // 立即清空输入框
 
     try {
+      // Natural-language auto-trigger for scanning the whole project.
+      // This runs scan_project directly (read-only) and then asks the model to write docs.
+      const scanIntent = detectScanProjectIntent(messageContent);
+      if (scanIntent.wantsScan) {
+        if (!rootPath || !rootPath.trim()) {
+          await sendMessage(
+            'Cannot scan the project because no project root is selected. Please open/select a project root first (so I know what to scan), then retry the scan request.',
+            { displayContent: '请先选择/打开项目根目录后再扫描（当前 rootPath 为空）' },
+          );
+          return;
+        }
+
+        const target = isDocsPath(scanIntent.targetDoc) ? normalizeRelativePath(scanIntent.targetDoc) : 'docs/summaryall.md';
+        const msgId = `auto_scan_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+        const aiContent = await buildAiContentWithRefs(
+          `You must generate a comprehensive project architecture summary.
+
+I will now scan the repository and send you TOOL RESULT batches (file excerpts).
+IMPORTANT: Do NOT answer yet. Wait until you receive TOOL RESULT batches before writing the docs.
+
+After you receive them, write the main doc to ${target} and optionally split module docs under docs/**.
+
+Rules:
+- Use only JSON edits to write docs (edits[{path,newText}]).
+- Do not ask the user to paste tree output.
+`,
+        );
+        await sendMessage(aiContent, { displayContent: messageContent });
+
+        await executeToolCalls(msgId, [
+          {
+            tool: 'scan_project',
+            args: {
+              path: '',
+              exclude_globs: ['**/node_modules/**', '**/target/**', '**/dist/**', '**/.git/**', '**/.pilot/**'],
+              batch_size: 12,
+              max_files: 400,
+              max_lines_per_file: 220,
+              target_path: target,
+            },
+          },
+        ]);
+        return;
+      }
+
+      // Allow power users to paste an action payload directly without waiting for the model.
+      const raw = messageContent;
+      const normalized = raw.startsWith('json') ? raw.slice(4).trim() : raw;
+      const directPayload = tryParseActionsFromAssistant(normalized);
+      if (directPayload) {
+        const msgId = `manual_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        const toolCalls = Array.isArray(directPayload.tool_calls) ? directPayload.tool_calls : [];
+        const edits = Array.isArray(directPayload.edits) ? directPayload.edits : undefined;
+        await executeToolCalls(msgId, toolCalls, edits);
+        return;
+      }
+
       const aiContent = await buildAiContentWithRefs(messageContent);
       const displayContent = buildDisplayContentWithRefs(messageContent);
       await sendMessage(aiContent, { displayContent });
     } catch (error) {
       console.error('发送消息失败:', error);
-      // 如果发送失败，恢复输入框内容
-      setInput(messageContent);
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyPress = (e: any) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       if (activeTab === 'chat') {
-        handleSendMessage();
+        void handleSendMessage();
       } else if (activeTab === 'decompose') {
-        decomposeRequirement();
+        void decomposeRequirement();
       }
     }
   };
@@ -675,41 +1260,128 @@ ${error}
                       {message.role === 'assistant' ? (
                         <div className="prose prose-sm max-w-none">
                           {(() => {
-                            const payload = tryParseEditsFromAssistant(String(message.content ?? ''));
+                            const payload = tryParseActionsFromAssistant(String(message.content ?? ''));
                             if (!payload) return null;
                             const applied = appliedByMsgId[message.id] ?? {};
+                            const pendingCmds = pendingCommandsByMsgId[message.id] ?? [];
+                            const totalEdits = Array.isArray(payload.edits) ? payload.edits.length : 0;
+                            const appliedCount = Array.isArray(payload.edits)
+                              ? payload.edits.reduce((acc, e) => acc + (applied[e.path] ? 1 : 0), 0)
+                              : 0;
+                            const hasPendingEdits = totalEdits > 0 && appliedCount < totalEdits;
                             return (
                               <div className="mb-2 rounded-md border border-blue-200 bg-blue-50 p-2">
-                                <div className="text-xs font-medium text-blue-800 mb-1">Edits</div>
-                                <div className="flex flex-col gap-1">
-                                  {payload.edits.map((e, idx) => {
-                                    const done = Boolean(applied[e.path]);
-                                    return (
-                                      <div key={e.path + '_' + idx} className="flex items-center justify-between gap-2">
-                                        <div className="text-[11px] text-blue-900 truncate" title={e.path}>
-                                          {e.path}
+                                {Array.isArray(payload.edits) && payload.edits.length ? (
+                                  <>
+                                    <div className="text-xs font-medium text-blue-800 mb-1">Edits (auto-applied)</div>
+                                    {hasPendingEdits ? (
+                                      <div className="text-[11px] text-blue-700 mb-1">Applying…</div>
+                                    ) : null}
+                                    <div className="flex flex-col gap-1">
+                                      {payload.edits.map((e, idx) => {
+                                        const done = Boolean(applied[e.path]);
+                                        return (
+                                          <div key={e.path + '_' + idx} className="flex items-center justify-between gap-2">
+                                            <div className="text-[11px] text-blue-900 truncate" title={e.path}>
+                                              {e.path}
+                                            </div>
+                                            <div
+                                              className={
+                                                'text-[11px] px-2 py-1 rounded border ' +
+                                                (done
+                                                  ? 'border-green-200 bg-green-50 text-green-700'
+                                                  : 'border-gray-200 bg-white text-gray-500')
+                                              }
+                                              title={done ? 'Applied' : 'Pending'}
+                                            >
+                                              {done ? 'Applied' : 'Pending'}
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </>
+                                ) : null}
+
+                                {pendingCmds.length ? (
+                                  <>
+                                    <div className="text-xs font-medium text-blue-800 mt-2 mb-1">Commands (confirm to run)</div>
+                                    <div className="flex flex-col gap-1">
+                                      {pendingCmds.map((c) => (
+                                        <div key={c.id} className="flex items-center justify-between gap-2">
+                                          <div className="min-w-0 flex-1">
+                                            <div className="text-[11px] text-blue-900 truncate" title={c.command}>
+                                              $ {c.command}
+                                            </div>
+                                            {c.output ? (
+                                              <div className="mt-1 text-[11px] text-gray-700 whitespace-pre-wrap break-words">
+                                                {c.output}
+                                              </div>
+                                            ) : null}
+                                          </div>
+                                          <button
+                                            type="button"
+                                            className={
+                                              'text-[11px] px-2 py-1 rounded border ' +
+                                              (c.status === 'pending'
+                                                ? 'border-blue-200 bg-white text-blue-700 hover:bg-blue-50'
+                                                : c.status === 'running'
+                                                  ? 'border-gray-200 bg-gray-50 text-gray-500'
+                                                  : c.status === 'done'
+                                                    ? 'border-green-200 bg-green-50 text-green-700'
+                                                    : 'border-red-200 bg-red-50 text-red-700')
+                                            }
+                                            disabled={c.status !== 'pending'}
+                                            onClick={async () => {
+                                              if (c.status !== 'pending') return;
+                                              setPendingCommandsByMsgId((prev) => {
+                                                const list = prev[message.id] ?? [];
+                                                return {
+                                                  ...prev,
+                                                  [message.id]: list.map((x) => (x.id === c.id ? { ...x, status: 'running' } : x)),
+                                                };
+                                              });
+                                              try {
+                                                const pid = `cmd_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+                                                pendingCommandMetaRef.current.set(pid, {
+                                                  msgId: message.id,
+                                                  cmdId: c.id,
+                                                  command: c.command,
+                                                  startedAt: Date.now(),
+                                                });
+                                                commandOutputBufRef.current.set(pid, '');
+                                                await invoke('execute_command_stream', {
+                                                  command: c.command,
+                                                  working_dir: c.cwd || rootPath || undefined,
+                                                  processId: pid,
+                                                });
+                                              } catch (e: any) {
+                                                const msg = typeof e === 'string' ? e : e?.message ? String(e.message) : 'Command failed';
+                                                setPendingCommandsByMsgId((prev) => {
+                                                  const list = prev[message.id] ?? [];
+                                                  return {
+                                                    ...prev,
+                                                    [message.id]: list.map((x) => (x.id === c.id ? { ...x, status: 'error', output: msg } : x)),
+                                                  };
+                                                });
+                                                await sendToolResult(`execute_command failed: ${c.command}`, msg);
+                                              }
+                                            }}
+                                            title={c.status === 'pending' ? 'Run' : c.status}
+                                          >
+                                            {c.status === 'pending'
+                                              ? 'Run'
+                                              : c.status === 'running'
+                                                ? 'Running'
+                                                : c.status === 'done'
+                                                  ? 'Done'
+                                                  : 'Error'}
+                                          </button>
                                         </div>
-                                        <button
-                                          type="button"
-                                          className={
-                                            'text-[11px] px-2 py-1 rounded border ' +
-                                            (done
-                                              ? 'border-green-200 bg-green-50 text-green-700'
-                                              : 'border-blue-200 bg-white text-blue-700 hover:bg-blue-50')
-                                          }
-                                          onClick={() => {
-                                            if (done) return;
-                                            void applyEdit(message.id, e);
-                                          }}
-                                          disabled={done}
-                                          title={done ? 'Applied' : 'Apply'}
-                                        >
-                                          {done ? 'Applied' : 'Apply'}
-                                        </button>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
+                                      ))}
+                                    </div>
+                                  </>
+                                ) : null}
                               </div>
                             );
                           })()}
@@ -761,7 +1433,12 @@ ${error}
                               ),
                             }}
                           >
-                            {message.content}
+                            {(() => {
+                              const payload = tryParseActionsFromAssistant(String(message.content ?? ''));
+                              if (!payload) return message.content;
+                              const stripped = stripFirstJsonObject(String(message.content ?? ''));
+                              return stripped || 'Applying actions…';
+                            })()}
                           </ReactMarkdown>
                         </div>
                       ) : (
