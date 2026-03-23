@@ -34,6 +34,10 @@ function pilotSessionPath(rootPath: string) {
     return `${rootPath}/.pilot/session.json`;
 }
 
+function pilotFileIndexPath(rootPath: string) {
+    return `${rootPath}/.pilot/file_index.json`;
+}
+
 // 创建 .pilot 索引文件
 async function createPilotIndexFile(rootPath: string) {
     console.log('Creating .pilot file for:', rootPath);
@@ -94,6 +98,63 @@ async function createPilotIndexFile(rootPath: string) {
         console.log('Successfully updated .pilot index file at:', pilotIndexPath);
     } catch (error) {
         console.error('Failed to create .pilot file:', error);
+    }
+}
+
+async function buildPilotFileIndex(rootPath: string) {
+    try {
+        const pilotDirPath = `${rootPath}/.pilot`;
+        await invoke('create_directory', { path: pilotDirPath });
+
+        const excludedDirNames = new Set([
+            'node_modules',
+            'target',
+            'dist',
+            'build',
+            '.git',
+            '.next',
+            '.turbo',
+            '.cache',
+            '.idea',
+            '.vscode',
+        ]);
+
+        const entries = (await invoke('read_directory_tree', { path: rootPath, maxDepth: 12 })) as any[];
+        const out: Array<{ path: string; displayPath: string }> = [];
+        const walk = (nodes: any[]) => {
+            for (const n of nodes ?? []) {
+                const p = typeof n?.path === 'string' ? n.path : '';
+                const t = typeof n?.type === 'string' ? n.type : (typeof n?.entry_type === 'string' ? n.entry_type : '');
+                const isDir = t === 'directory' || Array.isArray(n?.children);
+                if (isDir) {
+                    const name = typeof n?.name === 'string' && n.name ? String(n.name) : (p ? String(p).split(/[\\/]/).filter(Boolean).slice(-1)[0] : '');
+                    if (name && excludedDirNames.has(name)) {
+                        continue;
+                    }
+                    if (Array.isArray(n?.children)) walk(n.children);
+                    continue;
+                }
+                if (!p) continue;
+                const rel = p.startsWith(rootPath) ? p.slice(rootPath.length).replace(/^\//, '') : p;
+                out.push({ path: p, displayPath: rel || p });
+            }
+        };
+        walk(entries);
+        out.sort((a, b) => a.displayPath.localeCompare(b.displayPath));
+
+        const payload = JSON.stringify(
+            {
+                version: '1.0.0',
+                rootPath,
+                createdAt: new Date().toISOString(),
+                files: out,
+            },
+            null,
+            2,
+        );
+        await invoke('write_file', { path: pilotFileIndexPath(rootPath), content: payload });
+    } catch (e) {
+        console.error('Failed to build .pilot file index:', e);
     }
 }
 
@@ -299,6 +360,7 @@ function EditorShell() {
             setRootPath(path);
             console.log('About to create .pilot file...');
             await createPilotIndexFile(path);
+            void buildPilotFileIndex(path);
             await loadOutputLog();
         },
         [loadOutputLog],

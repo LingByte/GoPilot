@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Sparkles, Code, FileText, CheckCircle, AlertTriangle, Settings, Plus, Clock, ArrowLeft, X } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/tauri';
 import ReactMarkdown from 'react-markdown';
@@ -89,6 +89,7 @@ const AIPanelInner: React.FC<{ rootPath?: string }> = ({ rootPath }) => {
   const [filePickerQuery, setFilePickerQuery] = useState('');
   const [filePickerItems, setFilePickerItems] = useState<FileRef[]>([]);
   const [filePickerBusy, setFilePickerBusy] = useState(false);
+  const fileIndexLoadedRef = useRef<string>('');
 
   const [appliedByMsgId, setAppliedByMsgId] = useState<Record<string, Record<string, boolean>>>({});
 
@@ -169,6 +170,32 @@ const AIPanelInner: React.FC<{ rootPath?: string }> = ({ rootPath }) => {
     if (!q) return filePickerItems;
     return filePickerItems.filter((it) => it.displayPath.toLowerCase().includes(q));
   }, [filePickerItems, filePickerQuery]);
+
+  const loadProjectFilesFromIndex = useCallback(async () => {
+    if (!rootPath) return false;
+    const indexPath = `${rootPath}/.pilot/file_index.json`;
+    setFilePickerBusy(true);
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      const content = (await invoke('read_file', { path: indexPath })) as string;
+      const parsed = JSON.parse(String(content || '')) as any;
+      const files = Array.isArray(parsed?.files) ? parsed.files : [];
+      const out: FileRef[] = files
+        .map((x: any) => ({
+          path: typeof x?.path === 'string' ? x.path : '',
+          displayPath: typeof x?.displayPath === 'string' ? x.displayPath : '',
+        }))
+        .filter((x: FileRef) => x.path && x.displayPath);
+      out.sort((a, b) => a.displayPath.localeCompare(b.displayPath));
+      setFilePickerItems(out);
+      fileIndexLoadedRef.current = rootPath;
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setFilePickerBusy(false);
+    }
+  }, [rootPath]);
 
   const loadProjectFiles = async () => {
     if (!rootPath) return;
@@ -856,7 +883,10 @@ ${error}
                   const next = !filePickerOpen;
                   setFilePickerOpen(next);
                   if (next && filePickerItems.length === 0 && !filePickerBusy) {
-                    await loadProjectFiles();
+                    const ok = await loadProjectFilesFromIndex();
+                    if (!ok) {
+                      await loadProjectFiles();
+                    }
                   }
                 }}
                 disabled={!canReferenceFiles || isConversationLoading}
