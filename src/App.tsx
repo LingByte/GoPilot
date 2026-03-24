@@ -366,15 +366,55 @@ function EditorShell() {
         [loadOutputLog],
     );
 
-    const addRecentProject = useCallback((p: string) => {
-        const next = [p, ...recentProjects.filter((x) => x !== p)].slice(0, 12);
-        setRecentProjects(next);
+    useEffect(() => {
         try {
-            localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(next));
+            const raw = localStorage.getItem(RECENT_PROJECTS_KEY);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+                setRecentProjects(parsed.filter(Boolean).slice(0, 12));
+            }
         } catch {
             return;
         }
-    }, [recentProjects]);
+    }, []);
+
+    useEffect(() => {
+        // Restore last opened project root on startup.
+        // This avoids forcing the user to re-select the folder after reload.
+        try {
+            const saved = localStorage.getItem(EXPLORER_ROOT_KEY);
+            if (!saved) return;
+            void (async () => {
+                await handleRootPathChange(saved);
+                // Ensure the project is visible in Recent Projects even if the list was empty.
+                setRecentProjects((prev) => {
+                    const next = [saved, ...prev.filter((x) => x !== saved)].slice(0, 12);
+                    try {
+                        localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(next));
+                    } catch {
+                        // ignore
+                    }
+                    return next;
+                });
+                setActiveId('explorer');
+            })();
+        } catch {
+            return;
+        }
+    }, [handleRootPathChange]);
+
+    const addRecentProject = useCallback((p: string) => {
+        setRecentProjects((prev) => {
+            const next = [p, ...prev.filter((x) => x !== p)].slice(0, 12);
+            try {
+                localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(next));
+            } catch {
+                // ignore
+            }
+            return next;
+        });
+    }, []);
 
     const openRecentProject = useCallback(async (p: string) => {
         if (!p) return;
@@ -427,20 +467,7 @@ function EditorShell() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    useEffect(() => {
-        const saved = localStorage.getItem(EXPLORER_ROOT_KEY);
-        if (saved) setRootPath(saved);
-    }, []);
-
-    useEffect(() => {
-        try {
-            const raw = localStorage.getItem(RECENT_PROJECTS_KEY);
-            const list = raw ? JSON.parse(raw) : [];
-            if (Array.isArray(list)) setRecentProjects(list.filter(Boolean));
-        } catch {
-            return;
-        }
-    }, []);
+    // NOTE: Startup restore for rootPath and recentProjects is handled above.
 
     useEffect(() => {
         let unlisten: null | (() => void) = null;
@@ -462,11 +489,8 @@ function EditorShell() {
                     try {
                         await fs.readDir(candidate, { recursive: false });
                         console.log('Setting root path to:', candidate);
-                        setRootPath(candidate);
+                        await handleRootPathChange(candidate);
                         addRecentProject(candidate);
-                        console.log('About to create .pilot file...');
-                        await createPilotIndexFile(candidate); // 创建 .pilot 文件
-                        await loadOutputLog();
                         setActiveId('explorer');
                     } catch (error) {
                         console.error('Failed to open directory:', error);
@@ -489,7 +513,7 @@ function EditorShell() {
         return () => {
             if (unlisten) unlisten();
         };
-    }, []);
+    }, [addRecentProject, handleRootPathChange]);
 
     useEffect(() => {
         const handler = () => {

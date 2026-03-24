@@ -120,7 +120,17 @@ type AiEditItem = {
 
 type AiToolCall = {
   id?: string;
-  tool: 'read_file' | 'search_workspace' | 'write_file' | 'execute_command' | 'scan_project';
+  tool:
+    | 'read_file'
+    | 'search_workspace'
+    | 'write_file'
+    | 'execute_command'
+    | 'scan_project'
+    | 'classify_requirement'
+    | 'estimate_complexity'
+    | 'analyze_requirement'
+    | 'decompose_requirement'
+    | 'simple_decompose_requirement';
   args?: any;
 };
 
@@ -507,8 +517,9 @@ const AIPanelInner: React.FC<{ rootPath?: string }> = ({ rootPath }) => {
       '- read_file: read a file; can use offset/limit for large files via args.offset/args.limit.\n' +
       '- write_file / edits: write docs under docs/**.\n' +
       '- execute_command: propose a shell command (requires user confirmation).\n' +
+      '- Task decomposition tools: classify_requirement, estimate_complexity, analyze_requirement, decompose_requirement, simple_decompose_requirement.\n' +
       'If you want to perform actions, append a single JSON object at the END of your response inside a ```json code block with schema:\n' +
-      '{"edits": [{"path": string, "newText": string}], "tool_calls": [{"id": string, "tool": "read_file"|"search_workspace"|"write_file"|"execute_command"|"scan_project", "args": object}]}.\n' +
+      '{"edits": [{"path": string, "newText": string}], "tool_calls": [{"id": string, "tool": "read_file"|"search_workspace"|"write_file"|"execute_command"|"scan_project"|"classify_requirement"|"estimate_complexity"|"analyze_requirement"|"decompose_requirement"|"simple_decompose_requirement", "args": object}]}.\n' +
       '- "edits" are full-file rewrites (newText is the entire file content).\n' +
       '- "write_file" tool writes a file at args.path with args.content. Prefer writing docs to docs/*.md.\n' +
       '- "execute_command" proposes a shell command; it will require explicit user confirmation before running.\n' +
@@ -529,6 +540,17 @@ const AIPanelInner: React.FC<{ rootPath?: string }> = ({ rootPath }) => {
     },
     [sendMessage],
   );
+
+  const buildProjectContextPayload = useCallback(() => {
+    const existing = Array.isArray(filePickerItems) ? filePickerItems.map((x) => x.displayPath).filter(Boolean).slice(0, 4000) : [];
+    return {
+      project_root: rootPath,
+      project_type: 'desktop',
+      tech_stack: ['tauri', 'react', 'typescript', 'rust'],
+      existing_files: existing,
+      dependencies: [],
+    };
+  }, [filePickerItems, rootPath]);
 
   const applyEdit = useCallback(
     async (msgId: string, edit: AiEditItem) => {
@@ -701,6 +723,54 @@ const AIPanelInner: React.FC<{ rootPath?: string }> = ({ rootPath }) => {
             }
 
             await sendToolResult(`scan_project: done (${scopePathArg || rootPath})`, { total_files: filtered.length });
+            continue;
+          }
+
+          if (call.tool === 'classify_requirement') {
+            const text = String(call.args?.text ?? call.args?.requirement_text ?? call.args?.requirement ?? '').trim();
+            if (!text) continue;
+            const out = await invoke<any>('classify_requirement', { text });
+            await sendToolResult('classify_requirement', out);
+            continue;
+          }
+
+          if (call.tool === 'estimate_complexity') {
+            const requirement = String(call.args?.requirement ?? call.args?.text ?? '').trim();
+            if (!requirement) continue;
+            const projectContext = call.args?.project_context ?? call.args?.projectContext ?? buildProjectContextPayload();
+            const out = await invoke<any>('estimate_complexity', { requirement, projectContext });
+            await sendToolResult('estimate_complexity', out);
+            continue;
+          }
+
+          if (call.tool === 'analyze_requirement') {
+            const requirementText = String(call.args?.requirement_text ?? call.args?.requirementText ?? call.args?.text ?? '').trim();
+            if (!requirementText) continue;
+            const projectContext = call.args?.project_context ?? call.args?.projectContext ?? buildProjectContextPayload();
+            const out = await invoke<any>('analyze_requirement', { requirementText, projectContext });
+            await sendToolResult('analyze_requirement', out);
+            continue;
+          }
+
+          if (call.tool === 'decompose_requirement') {
+            const requirement = call.args?.requirement;
+            if (!requirement) {
+              await sendToolResult('decompose_requirement failed', 'Missing args.requirement (UserRequirement object).');
+              continue;
+            }
+            const out = await invoke<any>('decompose_requirement', { requirement });
+            await sendToolResult('decompose_requirement', out);
+            continue;
+          }
+
+          if (call.tool === 'simple_decompose_requirement') {
+            const requirement = call.args?.requirement;
+            if (!requirement) {
+              await sendToolResult('simple_decompose_requirement failed', 'Missing args.requirement (UserRequirement object).');
+              continue;
+            }
+            const out = await invoke<any>('simple_decompose_requirement', { requirement });
+            await sendToolResult('simple_decompose_requirement', out);
             continue;
           }
 
